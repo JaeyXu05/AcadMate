@@ -1,0 +1,166 @@
+/* ===== Chat Window ===== */
+.chatWindow {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 0;
+}
+
+.chatHeader {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chatTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.newChatBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.newChatBtn:hover:not(:disabled) {
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(102, 126, 234, 0.4);
+}
+
+.newChatBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---- Body ---- */
+.chatBody {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chatList {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---- Empty ---- */
+.chatEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 12px;
+  padding-bottom: 40px;
+}
+
+.chatEmptyIcon {
+  font-size: 48px;
+  opacity: 0.3;
+}
+
+.chatEmptyText {
+  font-size: 16px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.chatEmptyHint {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.25);
+  max-width: 280px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* ---- Footer ---- */
+.chatFooter {
+  flex-shrink: 0;
+  padding: 16px 20px 48px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.chatFooter :global(.ant-input) {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.18);
+  font-size: 18px;
+}
+
+.chatFooter :global(.ant-input)::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.chatFooter :global(.ant-input):focus {
+  border-color: #667eea;
+  box-shadow: none;
+}
+
+/* ===== Chat Bubbles ===== */
+.bubble {
+  max-width: 85%;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.bubbleUser {
+  align-self: flex-end;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+
+.bubbleAgent {
+  align-self: flex-start;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.8);
+  border-bottom-left-radius: 4px;
+}
+
+.bubbleContent {
+  white-space: pre-wrap;
+}
+
+.bubbleResultTag {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 12px;
+  color: #667eea;
+}
+
+/* ===== Blinking cursor ===== */
+.cursor {
+  display: inline-block;
+  animation: blink 1s step-end infinite;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}

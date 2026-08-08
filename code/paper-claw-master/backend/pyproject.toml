@@ -1,0 +1,42 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "Alemax067", email = "2657236382@qq.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.17.2",
+    "arxiv>=2.3.1",
+    "deepagents>=0.5.9",
+    "fastapi>=0.124.0",
+    "httpx>=0.28.1",
+    "openai>=2.8.1",
+    "pgvector>=0.4.2",
+    "psycopg[binary]>=3.3.2",
+    "pymupdf>=1.26.6",
+    "pydantic>=2.12.5",
+    "python-multipart>=0.0.20",
+    "pydantic-settings>=2.12.0",
+    "sqlalchemy>=2.0.44",
+    "tiktoken>=0.12.0",
+    "uvicorn>=0.38.0",
+    "langchain-openai>=1.2.1",
+    "langgraph-checkpoint-postgres>=3.1.0",
+    "langchain-deepseek>=1.0.1",
+]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.1.0",
+    "nbformat>=5.10.4",
+    "pytest>=9.0.1",
+]
+
+[project.scripts]
+backend = "backend:main"
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.11.0"]
+build-backend = "uv_build"

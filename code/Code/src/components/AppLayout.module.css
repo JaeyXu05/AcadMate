@@ -1,0 +1,104 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  transition: background-color 0.4s ease;
+}
+
+/* ===== Header ===== */
+.header {
+  display: flex;
+  align-items: center;
+  height: 64px;
+  padding: 0 28px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.headerLeft {
+  flex: 1;
+}
+
+/* ===== Tabs ===== */
+.tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 64px;
+  padding: 0 24px;
+  font-size: 17px;
+  color: rgba(255, 255, 255, 0.55);
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.2s;
+  user-select: none;
+}
+
+.tab::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 3px;
+  background: #667eea;
+  border-radius: 1.5px 1.5px 0 0;
+  transition: width 0.2s;
+}
+
+.tab:hover {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+/* NavLink 激活态 */
+.tabActive,
+.tab[data-active='true'] {
+  color: #fff;
+}
+
+.tabActive::after,
+.tab[data-active='true']::after {
+  width: 32px;
+}
+
+/* ===== Header Right ===== */
+.headerRight {
+  flex: 1;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+/* ===== Content ===== */
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ===== Footer ===== */
+.footer {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}

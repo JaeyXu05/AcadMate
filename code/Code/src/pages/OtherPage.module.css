@@ -1,0 +1,227 @@
+.container {
+  padding: 32px 40px;
+  max-width: 1100px;
+  margin: 0 auto;
+  flex: 1;
+  overflow-y: auto;
+  width: 100%;
+}
+
+/* ===== Card Grid ===== */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+  margin-top: 8px;
+}
+
+.entryCard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 40px 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, transform 0.15s;
+  user-select: none;
+}
+
+.entryCard:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(102, 126, 234, 0.4);
+  transform: translateY(-3px);
+}
+
+.entryIcon {
+  font-size: 36px;
+}
+
+.entryLabel {
+  font-size: 17px;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 500;
+}
+
+.entryDesc {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.35);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ===== History Panel ===== */
+.historyPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.historyTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.historyTitle h2 {
+  margin: 0;
+  color: #fff;
+  font-size: 22px;
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font-size: 13px;
+  transition: color 0.2s, border-color 0.2s;
+}
+
+.backBtn:hover {
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.historyActions {
+  display: flex;
+  gap: 10px;
+}
+
+.clearAllBtn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 77, 79, 0.3);
+  background: transparent;
+  color: rgba(255, 77, 79, 0.7);
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.clearAllBtn:hover {
+  border-color: rgba(255, 77, 79, 0.6);
+  color: rgba(255, 77, 79, 0.9);
+}
+
+/* ===== History Items ===== */
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: background 0.15s;
+}
+
+.historyItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.itemType {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.itemTypeSearch {
+  background: rgba(102, 126, 234, 0.15);
+  color: #667eea;
+}
+
+.itemTypeChat {
+  background: rgba(82, 196, 26, 0.15);
+  color: #52c41a;
+}
+
+.itemBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.itemContent {
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemMeta {
+  color: rgba(255, 255, 255, 0.3);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.itemDelete {
+  flex-shrink: 0;
+  font-size: 18px;
+  color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  transition: color 0.2s;
+  background: none;
+  border: none;
+  padding: 4px;
+}
+
+.itemDelete:hover {
+  color: rgba(255, 77, 79, 0.8);
+}
+
+/* ===== Pagination ===== */
+.paginationRow {
+  display: flex;
+  justify-content: center;
+  margin-top: 8px;
+}
+
+/* ===== States ===== */
+.loadingWrap {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 300px;
+}
+
+.emptyWrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 300px;
+  gap: 12px;
+}
+
+.emptyText {
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 15px;
+}
+
+.emptyHint {
+  color: rgba(255, 255, 255, 0.2);
+  font-size: 13px;
+}

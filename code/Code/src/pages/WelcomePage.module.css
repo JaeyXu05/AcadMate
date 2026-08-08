@@ -1,0 +1,170 @@
+.container {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+  gap: var(--space-6);
+  text-align: center;
+}
+
+/* ---- 品牌区 ---- */
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.logoBadge {
+  width: 84px;
+  height: 84px;
+  border-radius: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.35), rgba(118, 75, 162, 0.25));
+  border: 1px solid rgba(168, 192, 255, 0.25);
+  box-shadow: var(--shadow-brand);
+  margin-bottom: var(--space-2);
+}
+
+.title {
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: var(--color-text);
+  background: linear-gradient(135deg, #e8eeff 0%, #a8c0ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.subtitle {
+  font-size: 16px;
+  color: var(--color-text-3);
+  letter-spacing: 0.5px;
+  max-width: 560px;
+}
+
+/* ---- 真实数据统计 ---- */
+.stats {
+  display: flex;
+  gap: var(--space-6);
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.statItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 92px;
+}
+
+.statValue {
+  font-size: 30px;
+  font-weight: 700;
+  color: #a8c0ff;
+}
+
+.statLabel {
+  font-size: 13px;
+  color: var(--color-text-3);
+}
+
+/* ---- 功能速览 ---- */
+.features {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-4);
+  max-width: 900px;
+  width: 100%;
+}
+
+.feature {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  text-align: left;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.feature:hover {
+  transform: translateY(-3px);
+  border-color: var(--color-brand-soft);
+  box-shadow: var(--shadow-soft);
+}
+
+.featureIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: #a8c0ff;
+  background: rgba(102, 126, 234, 0.16);
+}
+
+.featureTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.featureDesc {
+  font-size: 13px;
+  color: var(--color-text-3);
+  line-height: 1.5;
+}
+
+/* ---- CTA ---- */
+.actions {
+  display: flex;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--color-text-3);
+  margin-top: -12px;
+}
+
+@media (max-width: 760px) {
+  .features {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .title {
+    font-size: 32px;
+  }
+  .stats {
+    gap: var(--space-3);
+  }
+}
+
+@media (max-width: 460px) {
+  .features {
+    grid-template-columns: 1fr;
+  }
+}

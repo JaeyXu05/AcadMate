@@ -1,0 +1,86 @@
+.container {
+  max-width: 880px;
+  margin: 32px auto;
+  padding: 0 32px 48px;
+  flex: 1;
+  overflow-y: auto;
+  width: 100%;
+}
+
+/* ===== 头部标识区 ===== */
+.profileHeader {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin-bottom: 28px;
+}
+
+.profileAvatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 28px;
+  font-weight: 600;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
+.profileTitle {
+  font-size: 24px;
+  color: #fff;
+  margin: 0;
+}
+
+.profileSubtitle {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+/* ===== 卡片 ===== */
+.card {
+  background: rgba(255, 255, 255, 0.04) !important;
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  border-radius: 12px !important;
+}
+
+.card :global(.ant-card-head) {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 48px;
+  padding: 0 24px;
+}
+
+.card :global(.ant-card-head-title) {
+  color: #fff;
+  font-size: 16px;
+}
+
+.card :global(.ant-card-body) {
+  padding: 24px;
+}
+
+/* 两列布局：基础信息 + 研究兴趣各占一半，在窄屏自动堆叠 */
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 24px;
+}
+
+.formGrid :global(.ant-form-item) {
+  margin-bottom: 20px;
+}
+
+.formFull {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 640px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}

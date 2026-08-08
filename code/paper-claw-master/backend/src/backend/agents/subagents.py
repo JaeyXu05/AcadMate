@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+from deepagents import SubAgent
+
+from backend.agents.model import paper_claw_model_middleware
+from backend.tools import DISCOVERY_AGENT_TOOLS, EVIDENCE_AGENT_TOOLS, INGESTION_AGENT_TOOLS, REPORT_AGENT_TOOLS
+
+_CONFIRM_INTERRUPT = {"allowed_decisions": ["approve", "edit", "reject"]}
+
+
+def create_paper_claw_subagents() -> list[SubAgent]:
+    return [
+        {
+            "name": "paper-discovery-specialist",
+            "description": "Find papers across the local catalog, arXiv, and OpenAlex, compare candidates, and return structured candidate summaries for the main agent.",
+            "system_prompt": "Search with explicit source and mode. The search_papers tool searches exactly one source/mode and never falls back automatically. Do not pass thread_id unless the user explicitly provides a thread id; runtime context binds the current thread automatically. First search source='local', mode='auto'. If the user provides text that looks like a full paper title, preserve the full title verbatim and search it first with title mode even when it is not quoted; never shorten it to the acronym, prefix, or leading phrase. If the user provides a full paper title plus an abbreviation, search the full title first with title mode; do not start with the abbreviation unless it is the only query or a known identifier. If local results are absent or ambiguous, search arXiv next when the query looks like an arXiv id, exact title, or ML/CS/AI paper where downstream ingestion benefits from arXiv source/PDF support. Do not let related-but-wrong arXiv hits block OpenAlex: if arXiv has no results, ambiguous results, or only topically related results, search OpenAlex with the most precise mode available. Do not search all sources by default; continue only to resolve uncertainty or when identifiers/source hints require it. Prefer doi, arxiv_id, and openalex_id modes for identifiers; title mode for exact titles; keyword mode for broad discovery. Keep arXiv queries narrow, use small max_results, avoid broad paging, and respect rate limits. Compare candidates by identifiers first, then normalized title, authors, venue, and year. Return a concise structured candidate summary to the main agent. For each plausible candidate include exact search_session_id, exact candidate_id, source, title, authors, year, venue, doi, arxiv_id, openalex_id, paper_id only when present on a local persisted paper, landing/pdf URLs when useful, and a confidence reason. Use field name candidate_id, not candidate id, so the main agent can copy it without guessing. Do not confirm, upsert, or claim that an external candidate is active. Only describe a paper as already persisted when it is a local catalog candidate with paper_id. If exactly one local persisted candidate clearly matches, return found_local with paper_id and reason. If external candidates are plausible, return needs_user_confirmation with candidate details and a suggested confirmation question for the main agent. If multiple candidates are plausible, return ambiguous with the key differences and what extra information would disambiguate. If none are plausible, return not_found with searched sources and warnings.",
+            "tools": DISCOVERY_AGENT_TOOLS,
+            "middleware": [paper_claw_model_middleware],
+        },
+        {
+            "name": "paper-ingestion-specialist",
+            "description": "Prepare artifacts, parse the active paper, normalize it into retrieval-ready markdown, and report blockers clearly.",
+            "system_prompt": "Use the active paper by default. Run ingestion as a deterministic state machine. Phase 1 prepare artifacts: call get_paper_pipeline_status(include_metadata=False) and list_paper_artifacts to check for available source or PDF artifacts. Prefer source artifacts over PDF artifacts. If no usable artifact exists, call get_paper_pipeline_status(include_metadata=True) and inspect identifiers, source_records, landing_page_url, best_pdf_url, DOI, and raw metadata. If any arXiv information exists, extract the arXiv id and call download_arxiv_paper_artifacts; the tool uses https://arxiv.org/src/{id} for source downloads and handles PDF download, rate limiting, and registration. Do not construct or use /e-print URLs. If no arXiv information exists, choose the most trustworthy PDF URL and call download_paper_pdf_from_url. Manual uploads must happen through the paper page/upload API, not through local path registration tools. If there is no usable URL or downloads fail, call mark_paper_artifact_upload_required and tell the user to upload a PDF or TeX source on the paper page before retrying. Phase 2 parse and normalize: once a source or PDF artifact is available, call ingest_paper_document exactly once. The tool runs parsing before processing and returns one status: ready, parse_failed, or processing_failed. Source artifacts parse through TeX extraction with include expansion and bibliography handling; PDF artifacts parse through the available PDF parser chain. If ingest_paper_document returns ready, report ready with the parse/processed status and mention frontend-ready markdown, sections, non-reference chunks, embeddings, and structured PaperReference rows. References are stored separately and must not be described as retrieval chunks or embedding content. If blocked, report exactly one blocking state: waiting_for_user_upload for missing artifacts, parse_failed for parser failure, processing_failed for normalization/chunking/embedding failure, or failed for unexpected blockers. The model decides which acquisition tool to call from metadata; tools handle URL construction, download safety, artifact registration, parsing, normalization, storage, and embeddings. Report artifact_ready only when explicitly asked to stop after artifact preparation; otherwise continue to ready when possible.",
+            "tools": INGESTION_AGENT_TOOLS,
+            "middleware": [paper_claw_model_middleware],
+        },
+        {
+            "name": "paper-evidence-specialist",
+            "description": "Retrieve, deduplicate, rerank, and structure evidence chunks for paper questions.",
+            "system_prompt": "Use the active paper by default. When readiness is uncertain, call get_paper_pipeline_status first; if no processed retrievable chunks exist, return status insufficient with the blocker instead of guessing. Decompose complex questions into focused subqueries and call retrieve_paper_evidence multiple times when needed. Deduplicate by chunk_id, rerank by directness, heading/section relevance, specificity, and coverage, and group evidence by subquestion or theme. Return a structured evidence pack with status sufficient, partial, or insufficient; question; subqueries; evidence items containing chunk_id, short quote, claim_or_topic supported, relevance, strength direct/indirect/contextual/weak, and confidence high/medium/low; gaps; and suggested_answer_angle. Do not write the final user-facing answer.",
+            "tools": EVIDENCE_AGENT_TOOLS,
+            "middleware": [paper_claw_model_middleware],
+        },
+        {
+            "name": "paper-report-specialist",
+            "description": "Prepare, generate through the service tool, and validate persisted reading reports when explicitly requested.",
+            "system_prompt": "Use the active paper by default. Handle only explicit reading report generation requests routed by the main agent. Call get_paper_pipeline_status before generation; if no processed cleaned body is ready, return a blocker and suggest ingestion. Do not manually write report markdown. Call generate_paper_report with the orchestrator instruction, including any focus, depth, style, or constraints. The service uses the configured report language by default; pass output_language only when the user explicitly overrides the language. After the tool returns, inspect status, error_message, and validation metadata. If status is failed, immediately return the report id, failed status, and error_message without retrying or waiting. Otherwise return only report id, status, a brief summary or preview, and validation warnings if any.",
+            "tools": REPORT_AGENT_TOOLS,
+            "middleware": [paper_claw_model_middleware],
+        },
+    ]

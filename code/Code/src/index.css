@@ -1,0 +1,113 @@
+/* ===== 设计令牌（设计系统）=====
+   统一色板/渐变/圆角/阴影/间距，各 CSS module 引用这些变量避免硬编码。
+   如需改品牌色，只改这一处即可全局生效。 */
+:root {
+  /* 品牌渐变（科研紫蓝 → 靛紫） */
+  --grad-brand: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --color-brand-1: #667eea;
+  --color-brand-2: #764ba2;
+  --color-brand-soft: rgba(102, 126, 234, 0.5);
+
+  /* 背景层级 */
+  --color-bg: #05060f;
+  --color-bg-elev: #0b0d1c;
+  --color-bg-card: rgba(255, 255, 255, 0.04);
+  --color-border: rgba(255, 255, 255, 0.08);
+
+  /* 文字 */
+  --color-text: #ffffff;
+  --color-text-2: rgba(255, 255, 255, 0.75);
+  --color-text-3: rgba(255, 255, 255, 0.45);
+
+  /* 圆角 */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+
+  /* 阴影 */
+  --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.4);
+  --shadow-brand: 0 4px 20px rgba(102, 126, 234, 0.4);
+
+  /* 间距 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    'Helvetica Neue',
+    Arial,
+    'Noto Sans SC',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: #fff;
+}
+
+/* 全局 Modal 暗色风格适配 */
+.ant-modal-content {
+  background-color: #1a1a2e !important;
+}
+
+/* Modal 标题与正文文字颜色（暗色背景下保证可读） */
+.ant-modal-content .ant-modal-header {
+  background-color: transparent !important;
+}
+.ant-modal-content .ant-modal-title,
+.ant-modal-confirm-title {
+  color: #fff !important;
+}
+.ant-modal-content .ant-modal-body,
+.ant-modal-confirm-content {
+  color: rgba(255, 255, 255, 0.75) !important;
+}
+
+/* 全局 Card 在暗色背景下的适配 */
+.ant-card {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+/* 全局暗色滚动条，避免在纯黑背景上出现刺眼的白色滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(102, 126, 234, 0.5);
+}

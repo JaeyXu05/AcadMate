@@ -1,0 +1,187 @@
+.container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 28px 32px 48px;
+  width: 100%;
+  max-width: 880px;
+  margin: 0 auto;
+}
+
+.loadingWrap,
+.errorWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 320px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* ---- Header ---- */
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 26px;
+  font-weight: 600;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
+}
+
+.headerInfo {
+  flex: 1;
+}
+
+.nameRow {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.name {
+  font-size: 24px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.title {
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.department {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-top: 4px;
+}
+
+.headerActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.emailBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.emailBtn:hover {
+  opacity: 0.9;
+}
+
+/* ---- Tags ---- */
+.tagsRow {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
+
+/* ---- Section ---- */
+.section {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+
+.sectionTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sectionText {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+/* ---- Metrics ---- */
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+}
+
+.metricCell {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  padding: 14px;
+  text-align: center;
+}
+
+.metricCellLabel {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.metricCellValue {
+  font-size: 22px;
+  font-weight: 600;
+  color: #fff;
+  margin-top: 4px;
+}
+
+/* ---- Papers ---- */
+.paperItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.paperItem:last-child {
+  border-bottom: none;
+}
+
+.paperVenue {
+  font-size: 12px;
+  color: #667eea;
+  flex-shrink: 0;
+}
+
+.paperYear {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  flex-shrink: 0;
+}
+
+/* ---- Contact / Recruiting ---- */
+.kvRow {
+  display: flex;
+  gap: 8px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.7);
+  line-height: 1.7;
+}
