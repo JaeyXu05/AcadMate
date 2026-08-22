@@ -1,0 +1,37 @@
+# ===== 通用 =====
+.DS_Store
+Thumbs.db
+*.log
+
+# ===== 依赖 / 构建产物 =====
+node_modules/
+dist/
+dist-server/
+__pycache__/
+*.pyc
+
+# ===== 运行时数据 / 数据库 =====
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# ===== 环境 / 密钥 =====
+.env
+.env.*
+
+# ===== Python =====
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# ===== Claude 本地状态（含绝对路径、个人授权） =====
+.claude/settings.local.json
+.claude/agent-memory/
+
+# ===== 中间产物 / 草稿 =====
+paper-claw-master/data/*.log
+paper-claw-master/data/*.bak
+paper-claw-master/data/_*
