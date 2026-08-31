@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from datetime import UTC, datetime, time as day_time
 
 from backend.db.repositories import ArxivTaskRepository
@@ -22,6 +23,7 @@ class ArxivTaskScheduler:
         self._poke_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._next_retry_at = 0.0
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -49,15 +51,24 @@ class ArxivTaskScheduler:
             self._poke_event.clear()
 
     def run_once(self) -> None:
+        if time.monotonic() < self._next_retry_at:
+            return
         if not self._lock.acquire(blocking=False):
             return
         try:
-            with get_session() as session:
-                repository = ArxivTaskRepository(session)
-                service = ArxivTaskService(session)
-                if _daily_due(repository) and repository.active_job() is None:
-                    service.enqueue_daily_run()
-                service.run_next_queue_step()
+            try:
+                with get_session() as session:
+                    repository = ArxivTaskRepository(session)
+                    service = ArxivTaskService(session)
+                    if _daily_due(repository) and repository.active_job() is None:
+                        service.enqueue_daily_run()
+                    service.run_next_queue_step()
+                self._next_retry_at = 0.0
+            except Exception:
+                # A transient DB outage should not hammer the database or fill
+                # the log on every scheduler tick.  The next tick will retry.
+                self._next_retry_at = time.monotonic() + min(60.0, self.interval_seconds)
+                raise
         finally:
             self._lock.release()
 

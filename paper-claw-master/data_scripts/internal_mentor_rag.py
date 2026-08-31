@@ -39,9 +39,11 @@ from backend.mentor_workflow.schemas import (
     MentorGoal,
     MentorResearchResult,
 )
+from backend.mentor_workflow.topic_cleaning import clean_topics as _clean_topics
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAG_PATH = REPO_ROOT / "data" / "ustc_mentor_rag.json"
+DEFAULT_TOP_K = 20
 
 
 def _normalize(value: str) -> str:
@@ -50,7 +52,14 @@ def _normalize(value: str) -> str:
 
 def _contains(text: str, term: str) -> bool:
     t = _normalize(term)
-    return bool(t and t in _normalize(text))
+    if not t:
+        return False
+    hay = _normalize(text)
+    # 纯 ASCII 且极短（≤2 字符）的词做整词匹配，避免 "RL" 这类缩写在
+    # "world"/"curl"/"RNA" 里被子串误命中；其余保留子串语义。
+    if re.fullmatch(r"[a-z0-9]{1,2}", t):
+        return bool(re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", hay))
+    return t in hay
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -166,11 +175,19 @@ class FileInternalMentorRag:
             for record in payload.get("evidence", [])
             if isinstance(record, dict)
         ]
-        self._candidates = [
-            CandidateMentor.model_validate(record)
-            for record in payload.get("candidates", [])
-            if isinstance(record, dict)
-        ]
+        self._candidates = []
+        for record in payload.get("candidates", []):
+            if not isinstance(record, dict):
+                continue
+            candidate = CandidateMentor.model_validate(record)
+            self._candidates.append(
+                candidate.model_copy(
+                    update={
+                        "research_topics": _clean_topics(candidate.research_topics),
+                        "methods": _clean_topics(candidate.methods),
+                    }
+                )
+            )
         # 预计算候选向量：合并研究方向/方法/论文/学院/姓名，一次算好供后续查询复用。
         # 先按全库统计 IDF（降常见二元组噪声），再逐候选做 TF*IDF 加权。
         raw_vectors = [
@@ -235,8 +252,7 @@ class FileInternalMentorRag:
             if candidate_filter and candidate.candidate_id not in candidate_filter:
                 continue
             if not concepts and not mentor_filter and not candidate_filter:
-                # 无任何检索条件时，返回全部（让上层兜底排序）。
-                scored.append((0.0, "", 0, candidate))
+                warnings.append("无检索条件，内部语料不召回全库")
                 continue
             haystack = " ".join(
                 [
@@ -247,23 +263,32 @@ class FileInternalMentorRag:
                     candidate.department or "",
                 ]
             )
-            # 词法：命中查询里的若干概念（子串归一化匹配）。
             hits = sum(1 for concept in concepts if _contains(haystack, concept))
-            # 语义：查询向量与候选向量的余弦相似度。
             cosine = (
                 _cosine_similarity(query_vector, self._candidate_vectors[index])
                 if self._candidate_vectors
                 else 0.0
             )
-            # 混合：语义为主、词法兜底，保证纯子串命中（含精确约束）也能排到。
             score = cosine * 100.0 + hits * 3.0
-            # 保留精确命中标识方便调试与稳定性（原逻辑同等条件即可召回）。
-            if hits > 0 or score > 0.0 or mentor_filter or candidate_filter:
+            # 无精确姓名/ID 时，hits=0 的余弦噪声不得入榜。
+            if mentor_filter or candidate_filter or hits >= 1:
                 scored.append((score, candidate.candidate_id, hits, candidate))
 
-        # 先按混合分降序，同分再按词法命中数，最后按 candidate_id 保证稳定排序。
         scored.sort(key=lambda item: (-item[0], -item[2], item[1]))
-        kept = [candidate for _, _, _, candidate in scored]
+        kept: list[CandidateMentor] = []
+        for score, _candidate_id, hits, candidate in scored[:DEFAULT_TOP_K]:
+            kept.append(
+                candidate.model_copy(
+                    deep=True,
+                    update={
+                        "source_metadata": {
+                            **candidate.source_metadata,
+                            "retrieve_hits": int(hits),
+                            "retrieve_score": round(float(score), 4),
+                        }
+                    },
+                )
+            )
 
         # 只回传与召回候选绑定的证据，避免账本里塞无关记录。
         kept_ids = {candidate.candidate_id for candidate in kept}

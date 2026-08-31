@@ -50,8 +50,15 @@ api.interceptors.response.use(
       clearToken();
       emitSessionExpired();
     } else if (!error.response) {
-      // 网络层错误（超时/断网/代理不可达）：多数页面未单独处理，这里统一上报，
-      // 避免静默失败。HTTP 层错误（4xx/5xx 带响应）由各页面自行处理，不重复提示。
+      // 显式加了长超时的请求（PDF 分析 / 论文阅读）由页面自己解释超时，
+      // 不要再弹出「网络连接异常」。
+      const timedOut =
+        error.code === 'ECONNABORTED' ||
+        String(error.message || '').toLowerCase().includes('timeout');
+      const longTimeout = Number(error.config?.timeout || 0) > 30000;
+      if (timedOut && longTimeout) {
+        return Promise.reject(error);
+      }
       emitApiNotice('网络连接异常，请检查后端服务是否已启动');
     }
     return Promise.reject(error);
@@ -68,3 +75,12 @@ function emitApiNotice(text: string): void {
 }
 
 export default api;
+
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  const response = (error as { response?: { status?: number; data?: { message?: unknown; error?: unknown } } })?.response;
+  const payload = response?.data;
+  const detail = [payload?.message, payload?.error].find((item) => typeof item === 'string' && item.trim()) as string | undefined;
+  if (detail) return `${fallback}：${detail}`;
+  if (response?.status) return `${fallback}（HTTP ${response.status}）`;
+  return fallback;
+}

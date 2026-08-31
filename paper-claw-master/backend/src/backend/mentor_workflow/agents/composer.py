@@ -52,6 +52,15 @@ class ResultComposerAgent:
                 FinalMentorResult(
                     candidate=candidate.model_copy(deep=True),
                     match=match.model_copy(deep=True) if match else None,
+                    evidence=[
+                        record.model_copy(deep=True)
+                        for reference in _unique([
+                            *candidate.evidence_refs,
+                            *(match.evidence_refs if match else []),
+                        ])
+                        if (record := ledger.get(reference)) is not None
+                        and record.candidate_id == candidate.candidate_id
+                    ],
                 )
             )
         evidence_refs = _unique(
@@ -106,6 +115,11 @@ class ResultComposerAgent:
             evidence_refs=evidence_refs,
             risks=risks,
             uncertainty=uncertainty,
+            query_contract=intent.query_contract,
+            retrieval_attempts=list(state.retrieval_attempts),
+            quality_status="PASS" if mentor_results else "NO_MATCH",
+            coverage_report=dict(state.coverage_report),
+            relation_judgements=list(state.relation_judgements),
         )
 
 
@@ -114,21 +128,42 @@ def _contact_email(result: FinalMentorResult, intent: IntentPacket) -> str:
     profile = intent.user_profile
     sender = profile.name or "[请填写姓名]"
     education = profile.education_level or "[请填写当前学历/年级]"
-    background = "、".join(profile.background) or "[请填写与导师方向相关的学习背景]"
-    interests = "、".join(mentor.research_topics) or "[请从已核验证据中选择研究方向]"
-    publication = (
-        mentor.publications[0] if mentor.publications else "[请从已核验证据中选择论文]"
-    )
+    background = "、".join(_email_phrases(profile.background, limit=5)) or "[请填写与导师方向相关的学习背景]"
+    interests = "、".join(_email_phrases(mentor.research_topics, limit=3)) or "[请从已核验证据中选择研究方向]"
+    publication = _short_email_text(mentor.publications[0]) if mentor.publications else "[请从已核验证据中选择论文]"
     return (
         f"主题：关于 {interests} 方向学习与研究机会的咨询\n\n"
         f"{mentor.mentor_name}老师您好：\n\n"
         f"我是{sender}，目前为{education}。我的相关背景包括：{background}。"
-        f"我关注您已核验资料中的 {interests} 方向，其中包含《{publication}》。"
-        "如果该资料与目前方向仍相关，我会先认真阅读并做好基础准备。\n\n"
+        f"我近期正在了解您公开的 {interests} 研究方向，并注意到公开资料中有《{publication}》。"
+        "我希望先从公开资料开始学习，并进一步确认适合自己的研究切入点。\n\n"
         "如您方便，我希望进一步了解适合学生参与的研究准备与公开申请方式。"
         "本邮件未假设您的招生状态，具体信息以您的正式回复或公开通知为准。\n\n"
         f"感谢您的时间。\n{sender}"
     )
+
+
+def _short_email_text(value: str, *, limit: int = 160) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    return text[:limit].rstrip("，。；、 ")
+
+
+def _email_phrases(values: list[str], *, limit: int) -> list[str]:
+    """Keep concise research labels and discard scraped recruitment boilerplate."""
+    blocked = (
+        "招生", "课程", "资料", "链接", "开源", "欢迎", "出版", "全套",
+        "书籍", "研究生", "考核", "在线", "http://", "https://", "@",
+    )
+    phrases: list[str] = []
+    for raw in values:
+        text = _short_email_text(raw, limit=60)
+        if not text or len(text) > 48 or any(marker in text for marker in blocked):
+            continue
+        if text not in phrases:
+            phrases.append(text)
+        if len(phrases) >= limit:
+            break
+    return phrases
 
 
 def _unique(values: list[str]) -> list[str]:

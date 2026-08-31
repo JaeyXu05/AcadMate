@@ -53,30 +53,61 @@ class Settings(BaseSettings):
     mentor_paper_fallback_max_results_per_source: int = 20
     mentor_paper_fallback_max_papers_per_candidate: int = 10
 
-    chat_api_key: str | None = None
-    chat_base_url: str | None = None
-    chat_model: str | None = None
-    chat_temperature: float = 0.2
-    chat_max_tokens: int = 4096
-    chat_timeout_seconds: int = 60
-    chat_max_retries: int = 2
-    chat_extra_body: dict[str, Any] | None = None
-    chat_rate_limiter_requests_per_second: float | None = None
-    chat_rate_limiter_check_every_n_seconds: float = 0.1
-    chat_rate_limiter_max_bucket_size: int = 10
+    # One chat-agent configuration is shared by every model-backed feature.
+    # Keep PAPER_CLAW_* compatibility while also accepting the explicit
+    # CHATAGENT_* names used by the combined application environment.
+    chat_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CHATAGENT_API_KEY",
+            "CHAT_AGENT_API_KEY",
+            "PAPER_CLAW_CHAT_API_KEY",
+        ),
+    )
+    chat_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CHATAGENT_BASE_URL",
+            "CHATAGENT_API_BASE",
+            "CHATAGENT_API_BASE_URL",
+            "CHAT_AGENT_BASE_URL",
+            "PAPER_CLAW_CHAT_BASE_URL",
+        ),
+    )
+    chat_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "CHATAGENT_MODEL",
+            "CHATAGENT_MODEL_NAME",
+            "CHAT_AGENT_MODEL",
+            "PAPER_CLAW_CHAT_MODEL",
+        ),
+    )
+    chat_temperature: float = Field(0.2, validation_alias=AliasChoices("CHATAGENT_TEMPERATURE", "CHATAGENT_CHAT_TEMPERATURE", "PAPER_CLAW_CHAT_TEMPERATURE"))
+    chat_max_tokens: int = Field(4096, validation_alias=AliasChoices("CHATAGENT_MAX_TOKENS", "CHATAGENT_CHAT_MAX_TOKENS", "PAPER_CLAW_CHAT_MAX_TOKENS"))
+    chat_timeout_seconds: int = Field(120, validation_alias=AliasChoices("CHATAGENT_TIMEOUT_SECONDS", "CHATAGENT_CHAT_TIMEOUT_SECONDS", "PAPER_CLAW_CHAT_TIMEOUT_SECONDS"))
+    chat_max_retries: int = Field(2, validation_alias=AliasChoices("CHATAGENT_MAX_RETRIES", "CHATAGENT_CHAT_MAX_RETRIES", "PAPER_CLAW_CHAT_MAX_RETRIES"))
+    chat_extra_body: dict[str, Any] | None = Field(default=None, validation_alias=AliasChoices("CHATAGENT_EXTRA_BODY", "PAPER_CLAW_CHAT_EXTRA_BODY"))
+    chat_rate_limiter_requests_per_second: float | None = Field(default=None, validation_alias=AliasChoices("CHATAGENT_RATE_LIMITER_REQUESTS_PER_SECOND", "PAPER_CLAW_CHAT_RATE_LIMITER_REQUESTS_PER_SECOND"))
+    chat_rate_limiter_check_every_n_seconds: float = Field(0.1, validation_alias=AliasChoices("CHATAGENT_RATE_LIMITER_CHECK_EVERY_N_SECONDS", "PAPER_CLAW_CHAT_RATE_LIMITER_CHECK_EVERY_N_SECONDS"))
+    chat_rate_limiter_max_bucket_size: int = Field(10, validation_alias=AliasChoices("CHATAGENT_RATE_LIMITER_MAX_BUCKET_SIZE", "PAPER_CLAW_CHAT_RATE_LIMITER_MAX_BUCKET_SIZE"))
 
-    embedding_api_key: str | None = None
-    embedding_base_url: str | None = None
+    embedding_api_key: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_API_KEY", "CHATAGENT_API_KEY", "CHAT_AGENT_API_KEY"))
+    embedding_base_url: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_BASE_URL", "CHATAGENT_BASE_URL", "CHATAGENT_API_BASE", "CHATAGENT_API_BASE_URL", "CHAT_AGENT_BASE_URL"))
+    embedding_provider: str = "openai_compatible"
     embedding_model: str | None = None
     embedding_dimension: int = 1536
+    embedding_cache_dir: Path | None = None
+    embedding_hf_endpoint: str | None = None
+    embedding_hf_disable_xet: bool = False
     embedding_max_context_tokens: int = Field(default=8192, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_MAX_CONTEXT_TOKENS", "MAX_CONTEXT_TOKENS", "embedding_max_context_tokens"))
     tokenizer_encoding: str = Field(default="cl100k_base", validation_alias=AliasChoices("PAPER_CLAW_TOKENIZER_ENCODING", "TOKENIZER_ENCODING", "tokenizer_encoding"))
     embedding_timeout_seconds: int = 60
     embedding_max_retries: int = 2
 
-    openalex_email: str | None = None
-    openalex_api_key: str | None = None
-    openalex_timeout_seconds: int = 30
+    openalex_email: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_OPENALEX_EMAIL", "OPENALEX_EMAIL"))
+    openalex_api_key: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_OPENALEX_API_KEY", "OPENALEX_API_KEY"))
+    openalex_timeout_seconds: int = Field(30, validation_alias=AliasChoices("PAPER_CLAW_OPENALEX_TIMEOUT_SECONDS", "OPENALEX_TIMEOUT_SECONDS"))
 
     local_ocr_api_key: str = "EMPTY"
     local_ocr_base_url: str | None = None
@@ -102,6 +133,10 @@ class Settings(BaseSettings):
             self.storage_root = self.data_dir / "files"
         else:
             self.storage_root = self.storage_root.expanduser().resolve()
+        if self.embedding_cache_dir is not None:
+            self.embedding_cache_dir = self.embedding_cache_dir.expanduser().resolve()
+        else:
+            self.embedding_cache_dir = self.data_dir / ".embedding_cache"
 
 
 @lru_cache(maxsize=1)

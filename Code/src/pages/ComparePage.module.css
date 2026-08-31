@@ -1,20 +1,23 @@
 .container {
+  position: relative;
   flex: 1;
   overflow-y: auto;
-  padding: 28px 32px 48px;
+  padding: 8px 8px 48px;
   width: 100%;
+  height: 100%;
   max-width: 1100px;
   margin: 0 auto;
 }
 
 .title {
-  color: #fff;
+  color: #1c1917;
   font-size: 22px;
+  font-weight: 500;
   margin: 0 0 4px;
 }
 
 .subtitle {
-  color: rgba(255, 255, 255, 0.45);
+  color: #78716c;
   font-size: 14px;
   margin: 0 0 24px;
 }
@@ -22,43 +25,31 @@
 .loadingWrap,
 .errorWrap {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   min-height: 320px;
-  color: rgba(255, 255, 255, 0.5);
+  color: #78716c;
 }
 
-/* ---- 对比表 ---- */
 .table {
   width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid rgba(28, 25, 23, 0.08);
 }
 
 .table th,
 .table td {
   padding: 14px 16px;
   text-align: left;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(28, 25, 23, 0.06);
   vertical-align: top;
 }
 
-.table th:last-child,
-.table td:last-child {
-  border-right: none;
-}
-
-.table tr:last-child td {
-  border-bottom: none;
-}
-
 .rowLabel {
-  background: rgba(255, 255, 255, 0.03);
-  color: rgba(255, 255, 255, 0.55);
+  background: #fafaf9;
+  color: #78716c;
   font-size: 13px;
   font-weight: 500;
   width: 120px;
@@ -66,27 +57,26 @@
 }
 
 .colHeader {
-  background: rgba(102, 126, 234, 0.1);
-  color: #fff;
+  color: #1c1917;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: 500;
   min-width: 160px;
 }
 
 .colHeaderDept {
   font-size: 12px;
   font-weight: 400;
-  color: rgba(255, 255, 255, 0.5);
+  color: #a8a29e;
   margin-top: 2px;
 }
 
 .cell {
-  color: rgba(255, 255, 255, 0.8);
+  color: #44403c;
   font-size: 14px;
 }
 
 .cellBest {
-  color: #52c41a;
+  color: #1c1917;
   font-weight: 600;
 }
 
@@ -99,7 +89,6 @@
 .cellTag {
   font-size: 11px;
   padding: 1px 8px;
-  border-radius: 8px;
-  background: rgba(102, 126, 234, 0.15);
-  color: #aab4ff;
+  border: 1px solid rgba(28, 25, 23, 0.12);
+  color: #57534e;
 }

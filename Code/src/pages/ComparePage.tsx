@@ -88,7 +88,7 @@ function ComparePage() {
         <div className={styles.errorWrap}>
           <Empty
             description={
-              <span style={{ color: 'rgba(255,255,255,0.45)' }}>
+              <span className="text-stone-400">
                 需要至少 2 位导师才能对比，请返回收藏夹重新选择
               </span>
             }
@@ -99,10 +99,9 @@ function ComparePage() {
             style={{
               marginTop: 16,
               padding: '8px 20px',
-              borderRadius: 8,
-              border: '1px solid rgba(102,126,234,0.4)',
-              background: 'rgba(102,126,234,0.12)',
-              color: '#aab4ff',
+              border: '1px solid rgba(28,25,23,0.12)',
+              background: '#fff',
+              color: '#1c1917',
               cursor: 'pointer',
             }}
           >
@@ -128,8 +127,8 @@ function ComparePage() {
     },
     { label: '论文数', render: (a) => a.papers, best: (a) => a.papers === maxPapers && a.papers > 0 },
     {
-      label: '匹配度',
-      render: (a) => `${Math.round(a.matchScore)}%`,
+      label: '相关性评分（非概率）',
+      render: (a) => `${Math.round(a.matchScore)}/100`,
       best: (a) => a.matchScore === maxMatch && a.matchScore > 0,
     },
   ];

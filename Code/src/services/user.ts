@@ -1,5 +1,5 @@
 import api from './axios';
-import type { FavoriteItem, ServerSettings, HistoryPage } from '../types/auth';
+import type { FavoriteItem, GrowthState, ServerSettings, HistoryPage } from '../types/auth';
 
 // ===== 用户信息 =====
 
@@ -13,6 +13,32 @@ export async function updateProfile(profile: Record<string, unknown>): Promise<R
 export async function deleteAccount(): Promise<{ deleted: boolean }> {
   const { data } = await api.delete('/user/account');
   return data;
+}
+
+export function emptyGrowth(): GrowthState {
+  return {
+    matched_mentors: [],
+    directions: [],
+    read_papers: [],
+    verified_experiences: [],
+    artifacts: [],
+    research_tasks: [],
+    direction_hypotheses: [],
+  };
+}
+
+/** 获取科研成长状态 */
+export async function getGrowth(): Promise<GrowthState> {
+  const { data } = await api.get<GrowthState>('/user/growth');
+  return {
+    matched_mentors: Array.isArray(data?.matched_mentors) ? data.matched_mentors : [],
+    directions: Array.isArray(data?.directions) ? data.directions : [],
+    read_papers: Array.isArray(data?.read_papers) ? data.read_papers : [],
+    verified_experiences: Array.isArray(data?.verified_experiences) ? data.verified_experiences : [],
+    artifacts: Array.isArray(data?.artifacts) ? data.artifacts : [],
+    research_tasks: Array.isArray(data?.research_tasks) ? data.research_tasks : [],
+    direction_hypotheses: Array.isArray(data?.direction_hypotheses) ? data.direction_hypotheses : [],
+  };
 }
 
 // ===== 收藏夹 =====
@@ -68,8 +94,17 @@ export async function clearHistory(): Promise<{ deleted: number }> {
 }
 
 /** 记录一次检索（写入 search_history） */
-export async function recordSearch(query: string, resultsCount: number): Promise<void> {
-  await api.post('/history/search', { query, results_count: resultsCount });
+export async function recordSearch(
+  query: string,
+  resultsCount: number,
+  meta?: { runId?: string; traceId?: string },
+): Promise<void> {
+  await api.post('/history/search', {
+    query,
+    results_count: resultsCount,
+    run_id: meta?.runId,
+    trace_id: meta?.traceId,
+  });
 }
 
 /** 记录一条对话消息（写入 chat_history） */

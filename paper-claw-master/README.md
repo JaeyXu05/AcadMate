@@ -57,11 +57,13 @@ Fill in these required values:
 PAPER_CLAW_CHAT_API_KEY=
 PAPER_CLAW_CHAT_BASE_URL=
 PAPER_CLAW_CHAT_MODEL=
+# The combined app also accepts CHATAGENT_API_KEY / CHATAGENT_BASE_URL / CHATAGENT_MODEL.
 
 PAPER_CLAW_EMBEDDING_API_KEY=
 PAPER_CLAW_EMBEDDING_BASE_URL=
 PAPER_CLAW_EMBEDDING_MODEL=
 
+PAPER_CLAW_OPENALEX_EMAIL=
 PAPER_CLAW_OPENALEX_API_KEY=
 PAPER_CLAW_LLAMA_PARSE_API_KEY=
 ```
@@ -70,7 +72,8 @@ Notes:
 
 - `PAPER_CLAW_CHAT_*`: used for agent chat, paper Q&A, and report generation.
 - `PAPER_CLAW_EMBEDDING_*`: used for paper content embeddings and evidence retrieval.
-- `PAPER_CLAW_OPENALEX_API_KEY`: used for OpenAlex paper search.
+- arXiv search/download is keyless; its rate-limit settings use `PAPER_CLAW_ARXIV_*`.
+- `PAPER_CLAW_OPENALEX_API_KEY` is optional. Set `PAPER_CLAW_OPENALEX_EMAIL` to a real contact address for the OpenAlex polite pool; otherwise the provider may return HTTP 429 under shared-IP traffic.
 - `PAPER_CLAW_LLAMA_PARSE_API_KEY`: used for LlamaParse document parsing.
 
 Do not commit a `.env` file containing real secrets.
@@ -87,4 +90,3 @@ This command runs database migrations and then starts both services:
 
 - Backend API: `http://localhost:8000`
 - Frontend dev server: Vite prints the actual URL in the terminal, usually `http://localhost:5173`
-

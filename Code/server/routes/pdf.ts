@@ -5,14 +5,10 @@ import os from 'os';
 import fs from 'fs';
 import { promisify } from 'util';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { ragStore, toLightAdvisor } from '../data/ragAdvisors';
-import {
-  extractPdfText,
-  rankCandidatesByContent,
-  inferTopicsFromMatches,
-  buildSummary,
-  buildKeyPoints,
-} from './pdfText';
+import { persistUploadedPdf, loadResearchDocument, updateResearchDocumentText } from '../data/researchDocuments';
+import { appendGrowthEvent } from '../data/growthStore';
+import { extractPdfPages, buildSummary, buildKeyPoints, type StructuredPdfAnalysis } from './pdfText';
+import { pdfGrowthPatch, isNumericRunId, runHarnessSkill, agentBase, probeAgent, explainAgentError } from '../harnessClient';
 
 const unlink = promisify(fs.unlink);
 
@@ -22,41 +18,10 @@ export const uploadRouter = Router();
 pdfRouter.use(authMiddleware);
 uploadRouter.use(authMiddleware);
 
-// ---- [STUB] PDF 上传与分析 ----
-// 队友 A（检索智能体）交付后：
-//   1) 把 POST /pdf/analyze 的实现替换为真实文档解析 + 智能体分析，
-//      保持响应契约 { summary, keyPoints, suggestedAdvisors } 不变，前端零改动；
-//   2) 上传端点 POST /upload/pdf 可保留（仅落地文件并返回 upload_id），分析逻辑替换即可。
-// 当前分析结果为基于文件名的确定性假数据，不实际解析 PDF 内容。
-
-// 内存中登记上传：upload_id → { filename, originalname, userId, uploadedAt }
-interface UploadRecord {
-  filename: string;
-  originalname: string;
-  userId: number;
-  uploadedAt: number;
-}
-const UPLOADS = new Map<string, UploadRecord>();
-
-/** upload_id 有效期：30 分钟内未分析的记录视为过期，避免内存 Map 无限增长（用户上传后未分析即关闭页面）。 */
-const UPLOAD_TTL_MS = 30 * 60 * 1000;
-
-/** 清扫过期的上传记录（在每次上传时顺带执行，惰性回收），同时删除已过期的临时文件。 */
-async function sweepExpiredUploads(): Promise<void> {
-  const now = Date.now();
-  for (const [id, rec] of UPLOADS) {
-    if (now - rec.uploadedAt > UPLOAD_TTL_MS) {
-      UPLOADS.delete(id);
-      // 未及时分析的临时 PDF 一并清掉，避免堆积
-      void unlink(path.join(os.tmpdir(), rec.filename)).catch(() => {});
-    }
-  }
-}
-
-// multer 落地到系统临时目录，文件名用 时间戳-随机串 避免冲突
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, os.tmpdir()),
   filename: (_req, file, cb) => {
+    file.originalname = decodeUploadName(file.originalname);
     const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     cb(null, `pdf-${unique}${path.extname(file.originalname) || '.pdf'}`);
   },
@@ -64,8 +29,10 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  limits: { fileSize: 20 * 1024 * 1024 },
+  defParamCharset: 'utf8',
   fileFilter: (_req, file, cb) => {
+    file.originalname = decodeUploadName(file.originalname);
     if (
       file.mimetype === 'application/pdf' ||
       file.originalname.toLowerCase().endsWith('.pdf')
@@ -77,7 +44,20 @@ const upload = multer({
   },
 });
 
-/** POST /api/upload/pdf — 上传 PDF，返回 upload_id（stub 仅落地文件，不做分析） */
+/** multer 默认按 latin1 解 Content-Disposition；中文文件名会变成 å°ºäºº 这类乱码。 */
+function decodeUploadName(name: string): string {
+  if (!name) return name;
+  try {
+    const repaired = Buffer.from(name, 'latin1').toString('utf8');
+    const repairedHasCjk = /[\u4e00-\u9fff]/.test(repaired);
+    const originalHasCjk = /[\u4e00-\u9fff]/.test(name);
+    if (repairedHasCjk && !originalHasCjk) return repaired;
+  } catch {
+    /* keep original */
+  }
+  return name;
+}
+
 uploadRouter.post('/pdf', upload.single('file'), async (req: AuthRequest, res: Response) => {
   const file = req.file;
   if (!file) {
@@ -85,15 +65,13 @@ uploadRouter.post('/pdf', upload.single('file'), async (req: AuthRequest, res: R
     return;
   }
 
-  // 魔数嗅探：只凭扩展名/MIME 不可靠（可伪造），读文件头确认是真正的 PDF（%PDF-）。
-  // 这里在临时文件落地（磁盘路径 file.path）后同步读前几字节校验，非 PDF 则删掉临时文件拒绝。
   try {
     const fd = fs.openSync(file.path, 'r');
     const head = Buffer.alloc(5);
     fs.readSync(fd, head, 0, 5, 0);
     fs.closeSync(fd);
     if (!head.equals(Buffer.from('%PDF-'))) {
-      await unlink(file.path).catch(() => {}); // 清理：不是真 PDF 时不留垃圾临时文件
+      await unlink(file.path).catch(() => {});
       res.status(400).json({ message: '文件内容不是有效的 PDF（魔数校验失败）' });
       return;
     }
@@ -103,22 +81,29 @@ uploadRouter.post('/pdf', upload.single('file'), async (req: AuthRequest, res: R
     return;
   }
 
-  const upload_id = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-  await sweepExpiredUploads(); // 惰性回收过期记录，防止未分析的上传长期堆积
-  UPLOADS.set(upload_id, {
-    filename: file.filename,
-    originalname: file.originalname,
-    userId: req.userId!,
-    uploadedAt: Date.now(),
-  });
-  res.json({ upload_id, filename: file.originalname });
+  try {
+    const doc = persistUploadedPdf({
+      userId: req.userId!,
+      originalName: file.originalname,
+      sourcePath: file.path,
+    });
+    appendGrowthEvent(req.userId!, {
+      verb: 'uploaded',
+      objectType: 'document',
+      objectId: doc.documentId,
+      result: { original_name: doc.originalName, content_hash: doc.contentHash },
+    });
+    res.json({
+      upload_id: doc.documentId,
+      document_id: doc.documentId,
+      filename: file.originalname,
+    });
+  } catch {
+    await unlink(file.path).catch(() => {});
+    res.status(500).json({ message: '保存 PDF 失败，请重试' });
+  }
 });
 
-/**
- * multer 错误处理中间件：把 multer 抛出的文件类型/大小错误转为统一 JSON 响应，
- * 否则 Express 默认返回 HTML 错误页，前端 axios 无法解析。
- * 必须挂在 /upload/pdf 路由之后。
- */
 uploadRouter.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof multer.MulterError) {
     const limitMap: Record<string, string> = {
@@ -129,7 +114,6 @@ uploadRouter.use((err: unknown, _req: Request, res: Response, _next: NextFunctio
     return;
   }
   if (err instanceof Error) {
-    // fileFilter 抛出的"仅支持 PDF 文件"等自定义错误
     res.status(400).json({ message: err.message });
     return;
   }
@@ -138,76 +122,164 @@ uploadRouter.use((err: unknown, _req: Request, res: Response, _next: NextFunctio
 
 interface AnalyzeBody {
   upload_id?: string;
+  document_id?: string;
 }
 
-/** POST /api/pdf/analyze — 分析已上传的 PDF（真实文本抽取 + 内容匹配） */
+function analysisBudget(pages: Array<{ page: number; text: string }>): Array<{ page: number; text: string }> {
+  const maxPagesRaw = Number(process.env.PDF_MAX_ANALYSIS_PAGES || 64);
+  const maxCharsRaw = Number(process.env.PDF_MAX_ANALYSIS_CHARS || 120000);
+  const maxPages = Number.isFinite(maxPagesRaw) ? Math.max(8, Math.min(200, Math.floor(maxPagesRaw))) : 64;
+  const maxChars = Number.isFinite(maxCharsRaw) ? Math.max(20000, Math.min(500000, Math.floor(maxCharsRaw))) : 120000;
+  if (pages.length <= maxPages && pages.reduce((sum, page) => sum + page.text.length, 0) <= maxChars) return pages;
+
+  // 保留首页（标题/摘要）和末页（结论），中间页按原顺序截断，避免把
+  // 大型论文的全部正文一次性放进 AgentRun context。
+  const selected = pages.length > maxPages
+    ? [...pages.slice(0, Math.max(1, maxPages - 2)), ...pages.slice(-2)]
+    : [...pages];
+  let remaining = maxChars;
+  return selected.map((page) => {
+    if (remaining <= 0) return { page: page.page, text: '' };
+    const text = page.text.slice(0, remaining);
+    remaining -= text.length;
+    return { page: page.page, text };
+  }).filter((page) => page.text.trim());
+}
+
+function pdfAgentTimeoutMs(): number {
+  const configured = Number(process.env.PDF_AGENT_TIMEOUT_MS || 360000);
+  return Number.isFinite(configured) ? Math.max(30_000, Math.min(configured, 480_000)) : 360000;
+}
+
 pdfRouter.post('/analyze', async (req: AuthRequest, res: Response) => {
-  const { upload_id } = (req.body ?? {}) as AnalyzeBody;
-  if (!upload_id) {
+  const body = (req.body ?? {}) as AnalyzeBody;
+  const documentId = body.document_id || body.upload_id;
+  if (!documentId) {
     res.status(400).json({ message: '请提供 upload_id' });
     return;
   }
-  const record = UPLOADS.get(upload_id);
+  const record = loadResearchDocument(req.userId!, documentId);
   if (!record) {
-    res.status(404).json({ message: '上传记录不存在或已过期，请重新上传' });
+    res.status(404).json({ message: '文档不存在，请重新上传' });
     return;
   }
-  // 简单的归属校验：upload_id 必须属于当前用户
-  if (record.userId !== req.userId) {
-    res.status(403).json({ message: '无权分析该文件' });
+  if (!fs.existsSync(record.storedPath)) {
+    res.status(404).json({ message: '文档文件缺失，请重新上传' });
     return;
   }
 
-  const filePath = path.join(os.tmpdir(), record.filename);
-  const candidates = ragStore.getCandidates();
+  if (!agentBase()) {
+    res.status(503).json({
+      message: 'PDF 分析需要 A 端 Mentor Agent（MENTOR_AGENT_BASE_URL）。当前未配置，上传已保存，请启动 A 端后再点「开始分析」。',
+    });
+    return;
+  }
+  const reachable = await probeAgent(2500);
+  if (!reachable) {
+    res.status(503).json({
+      message: `Mentor Agent 未启动或无法连接（${agentBase()}）。PDF 已保存在本服务；分析需要先启动 A 端后再点「开始分析」。`,
+    });
+    return;
+  }
 
-  // ---- 1) 抽取 PDF 全文 ----
-  let docText = '';
+  const pages = await extractPdfPages(record.storedPath);
+  const docText = pages.map((page) => page.text).join('\n');
+  if (!pages.length || !docText.trim()) {
+    updateResearchDocumentText(record.documentId, '', null, 'empty_text');
+    res.status(422).json({
+      message: '未能从 PDF 抽取正文。该文件可能是扫描件、图片 PDF 或已加密；系统不会用二进制文本或文件名冒充智能体分析结果。',
+    });
+    return;
+  }
+  if (docText && docText !== record.extractedText) {
+    updateResearchDocumentText(record.documentId, docText, pages.length, docText ? 'parsed' : 'empty_text');
+  }
+
   try {
-    docText = await extractPdfText(filePath);
-  } catch {
-    docText = '';
+    const pagesForAnalysis = analysisBudget(pages);
+    const result = await runHarnessSkill({
+      userId: req.userId!,
+      skillId: 'pdf_analyze',
+      message: `分析文档 ${record.originalName}`,
+      query: record.documentId,
+      timeoutMs: pdfAgentTimeoutMs(),
+      context: {
+        document_id: record.documentId,
+        pages: pagesForAnalysis,
+        source_page_count: pages.length,
+      },
+      patcher: (runId, payload) => pdfGrowthPatch(runId, record.documentId, payload),
+    });
+    const advisors = Array.isArray(result?.artifact?.advisors) ? result.artifact.advisors : [];
+    const suggestedAdvisors = advisors.map((item: any) => ({
+      id: String(item.id || ''),
+      name: String(item.name || ''),
+      title: String(item.title || ''),
+      department: String(item.department || ''),
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      papers: Number(item.papers || 0),
+      matchScore: Number(item.matchScore || 0),
+      explanation: item.explanation,
+      evidenceRefs: item.evidenceRefs,
+      scoreKind: String(item.scoreKind || 'dense_semantic_llm_rerank'),
+    }));
+    const reviewStatus = String(result?.review_status || 'NEED_MORE_INPUT');
+    const analysis = result?.artifact?.analysis && typeof result.artifact.analysis === 'object'
+      ? result.artifact.analysis as StructuredPdfAnalysis
+      : undefined;
+    if (reviewStatus !== 'PASS' || !analysis) {
+      const detail = String(result?.artifact?.error || `Review ${reviewStatus}`);
+      appendGrowthEvent(req.userId!, {
+        verb: 'analyze_blocked',
+        objectType: 'document',
+        objectId: record.documentId,
+        result: { review_status: reviewStatus, run_id: result?.run_id, error: detail },
+        context: { evidence_refs: result?.evidence_refs ?? [] },
+        sourceRunId: isNumericRunId(String(result?.run_id || '')) ? String(result.run_id) : null,
+        sourceSkillId: 'pdf_analyze',
+      });
+      res.status(/timeout|timed out/i.test(detail) ? 504 : 502).json({
+        message: `PDF 智能体未产出通过审核的分析：${detail}`,
+        run_id: result?.run_id,
+        review_status: reviewStatus,
+        retryable: true,
+      });
+      return;
+    }
+    const summary = buildSummary(docText, [], record.originalName, suggestedAdvisors.length, {
+      reviewStatus,
+      analysis,
+    });
+    const keyPoints = buildKeyPoints(docText, [], [], [], {
+      reviewStatus,
+      advisors: suggestedAdvisors,
+      error: result?.artifact?.error,
+      analysis,
+    });
+    appendGrowthEvent(req.userId!, {
+      verb: reviewStatus === 'PASS' ? 'analyzed' : 'analyze_blocked',
+      objectType: 'document',
+      objectId: record.documentId,
+      result: { review_status: reviewStatus, run_id: result?.run_id, advisor_ids: suggestedAdvisors.map((item: any) => item.id) },
+      context: { evidence_refs: result?.evidence_refs ?? [] },
+      sourceRunId: isNumericRunId(String(result?.run_id || '')) ? String(result.run_id) : null,
+      sourceSkillId: 'pdf_analyze',
+    });
+    res.json({
+      summary,
+      keyPoints,
+      suggestedAdvisors,
+      document_id: record.documentId,
+      content_hash: record.contentHash,
+      run_id: result?.run_id,
+      review_status: reviewStatus,
+      evidence_refs: result?.evidence_refs ?? [],
+      scoreKind: suggestedAdvisors[0]?.scoreKind || 'dense_semantic_llm_rerank',
+    });
+  } catch (err: any) {
+    const explained = explainAgentError(err, 'PDF 分析需要 A 端 Harness，当前无法完成。');
+    res.status((explained as Error & { status?: number }).status || 503).json({
+      message: explained.message,
+    });
   }
-
-  // ---- 2) 基于内容匹配导师（若文本为空则回退整库给定序推荐）----
-  const contentMatches = rankCandidatesByContent(candidates, docText);
-  const topics = inferTopicsFromMatches(contentMatches, candidates);
-
-  let picks: typeof candidates;
-  let matchedTerms: string[][] = [];
-  if (contentMatches.length) {
-    picks = contentMatches.slice(0, 3).map((m) => candidates[m.index]);
-    matchedTerms = contentMatches.slice(0, 3).map((m) => m.matchedTerms);
-  } else {
-    // 无文本可匹配：按论文数取前 3 支确定性导师，保证仍能出结果
-    picks = candidates
-      .slice()
-      .sort((a, b) => (Array.isArray(b.publications) ? b.publications.length : 0) - (Array.isArray(a.publications) ? a.publications.length : 0))
-      .slice(0, 3);
-    matchedTerms = picks.map(() => []);
-  }
-
-  const suggestedAdvisors = picks
-    .map((c, i) => {
-      const terms = matchedTerms[i] ?? [];
-      return {
-        ...toLightAdvisor(c),
-        matchScore: 60 + Math.min(35, Math.round((contentMatches[i]?.score ?? 0) / 2)),
-        explanation: terms.length
-          ? `检测到文档关键词「${terms.slice(0, 3).join('、')}」，与 ${c.mentor_name} 的研究方向「${(Array.isArray(c.research_topics) ? c.research_topics : []).slice(0, 2).join('、') || '相关领域'}」匹配。`
-          : `${c.mentor_name} 在「${(Array.isArray(c.research_topics) ? c.research_topics : []).slice(0, 2).join('、') || '相关领域'}」方向可能与你上传的文档兴趣相符。`,
-      };
-    })
-    .sort((a, b) => b.matchScore - a.matchScore);
-
-  const summary = buildSummary(docText, topics, record.originalname, suggestedAdvisors.length);
-  const keyPoints = buildKeyPoints(docText, topics, contentMatches, candidates);
-
-  // ---- 3) 清理临时文件 + 移除登记 ----
-  UPLOADS.delete(upload_id);
-  void unlink(filePath).catch(() => {
-    // 文件可能已被系统/其他清理移除，忽略
-  });
-
-  res.json({ summary, keyPoints, suggestedAdvisors });
 });

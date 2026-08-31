@@ -1,23 +1,29 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
-import WelcomePage from './pages/WelcomePage';
-import SearchPage from './pages/SearchPage';
-import CloudPage from './pages/CloudPage';
-import OtherPage from './pages/OtherPage';
-import ProfilePage from './pages/ProfilePage';
-import SettingsPage from './pages/SettingsPage';
-import FavoritesPage from './pages/FavoritesPage';
-import AdvisorDetailPage from './pages/AdvisorDetailPage';
-import EmailPage from './pages/EmailPage';
-import ComparePage from './pages/ComparePage';
-import PdfPage from './pages/PdfPage';
-import RecommendPage from './pages/RecommendPage';
 import AppLayout from './components/AppLayout';
 import GuestGuard from './components/GuestGuard';
 import AuthGuard from './components/AuthGuard';
 import { useAuthStore } from './stores/authStore';
 import { SESSION_EXPIRED_EVENT, API_NOTICE_EVENT } from './services/axios';
+
+const WelcomePage = lazy(() => import('./pages/WelcomePage'));
+const SearchPage = lazy(() => import('./pages/SearchPage'));
+const CloudPage = lazy(() => import('./pages/CloudPage'));
+const OtherPage = lazy(() => import('./pages/OtherPage'));
+const ProfilePage = lazy(() => import('./pages/ProfilePage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const FavoritesPage = lazy(() => import('./pages/FavoritesPage'));
+const AdvisorDetailPage = lazy(() => import('./pages/AdvisorDetailPage'));
+const EmailPage = lazy(() => import('./pages/EmailPage'));
+const ComparePage = lazy(() => import('./pages/ComparePage'));
+const PdfPage = lazy(() => import('./pages/PdfPage'));
+const RecommendPage = lazy(() => import('./pages/RecommendPage'));
+const ReportsPage = lazy(() => import('./pages/ReportsPage'));
+const PlansPage = lazy(() => import('./pages/PlansPage'));
+const ResearchPage = lazy(() => import('./pages/ResearchPage'));
+const SkillsPage = lazy(() => import('./pages/SkillsPage'));
+const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'));
 
 function AppRoutes() {
   const { message: antdMessage } = AntdApp.useApp();
@@ -29,7 +35,6 @@ function AppRoutes() {
     restoreSession();
   }, [restoreSession]);
 
-  // 监听"会话过期"事件：应用内跳转欢迎页 + 提示，避免整页刷新丢失 SPA 状态。
   useEffect(() => {
     const onExpired = () => {
       logout();
@@ -42,7 +47,6 @@ function AppRoutes() {
     return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
   }, [logout, navigate, antdMessage]);
 
-  // 监听"网络层错误"事件：axios 拦截器检测到超时/断网/代理不可达时统一提示。
   useEffect(() => {
     const onNotice = (e: Event) => {
       const detail = (e as CustomEvent<{ text: string }>).detail;
@@ -53,42 +57,52 @@ function AppRoutes() {
   }, [antdMessage]);
 
   return (
-    <Routes>
-      {/* 欢迎页：独立，无 AppLayout */}
-      <Route
-        path="/welcome"
-        element={
-          <GuestGuard>
-            <WelcomePage />
-          </GuestGuard>
-        }
-      />
+    <Suspense
+      fallback={
+        <div className="grid min-h-screen place-items-center bg-gradient-to-br from-slate-100 via-white to-stone-50 text-stone-400">
+          加载中…
+        </div>
+      }
+    >
+      <Routes>
+        <Route
+          path="/welcome"
+          element={
+            <GuestGuard>
+              <WelcomePage />
+            </GuestGuard>
+          }
+        />
 
-      {/* 主界面：包裹在 AppLayout 中 */}
-      <Route
-        element={
-          <AuthGuard>
-            <AppLayout />
-          </AuthGuard>
-        }
-      >
-        <Route index element={<Navigate to="/search" replace />} />
-        <Route path="/search" element={<SearchPage />} />
-        <Route path="/cloud" element={<CloudPage />} />
-        <Route path="/other" element={<OtherPage />} />
-        <Route path="/profile" element={<ProfilePage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/favorites" element={<FavoritesPage />} />
-        <Route path="/advisor/:id" element={<AdvisorDetailPage />} />
-        <Route path="/email" element={<EmailPage />} />
-        <Route path="/compare" element={<ComparePage />} />
-        <Route path="/pdf" element={<PdfPage />} />
-        <Route path="/recommend" element={<RecommendPage />} />
-      </Route>
+        <Route
+          element={
+            <AuthGuard>
+              <AppLayout />
+            </AuthGuard>
+          }
+        >
+          <Route index element={<Navigate to="/search" replace />} />
+          <Route path="/search" element={<SearchPage />} />
+          <Route path="/cloud" element={<CloudPage />} />
+          <Route path="/other" element={<OtherPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/favorites" element={<FavoritesPage />} />
+          <Route path="/advisor/:id" element={<AdvisorDetailPage />} />
+          <Route path="/email" element={<EmailPage />} />
+          <Route path="/compare" element={<ComparePage />} />
+          <Route path="/pdf" element={<PdfPage />} />
+          <Route path="/recommend" element={<RecommendPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/plans" element={<PlansPage />} />
+          <Route path="/research" element={<ResearchPage />} />
+          <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/integrations" element={<IntegrationsPage />} />
+        </Route>
 
-      {/* 默认重定向到欢迎页 */}
-      <Route path="*" element={<Navigate to="/welcome" replace />} />
-    </Routes>
+        <Route path="*" element={<Navigate to="/welcome" replace />} />
+      </Routes>
+    </Suspense>
   );
 }
 
@@ -96,10 +110,13 @@ function App() {
   return (
     <ConfigProvider
       theme={{
-        algorithm: theme.darkAlgorithm,
+        algorithm: theme.defaultAlgorithm,
         token: {
-          colorPrimary: '#667eea',
+          colorPrimary: '#1c1917',
           borderRadius: 6,
+          fontFamily: 'Inter, ui-sans-serif, system-ui, sans-serif',
+          colorText: '#1c1917',
+          colorBgContainer: '#ffffff',
         },
       }}
     >

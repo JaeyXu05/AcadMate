@@ -22,4 +22,8 @@ export interface PdfAnalysisResult {
   keyPoints: string[];
   /** 据论文内容推荐的导师 */
   suggestedAdvisors: Advisor[];
+  document_id?: string;
+  review_status?: string;
+  scoreKind?: Advisor['scoreKind'];
+  evidence_refs?: string[];
 }

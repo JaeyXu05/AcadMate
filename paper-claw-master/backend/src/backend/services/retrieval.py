@@ -10,7 +10,9 @@ from backend.db.models import DocumentChunk, ProcessedDocument
 from backend.schemas import RetrievedChunk
 from backend.services.embeddings import EmbeddingService
 
+VECTOR_MIN_SCORE = 0.08
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+")
+_CJK_RUN_RE = re.compile(r"[一-鿿]{2,}")
 
 
 class RetrievalService:
@@ -41,7 +43,10 @@ class RetrievalService:
                 key=lambda item: item.score,
                 reverse=True,
             )
-            return ranked[:limit]
+            filtered = [item for item in ranked if item.score >= VECTOR_MIN_SCORE]
+            if filtered:
+                return filtered[:limit]
+            return self.retrieve_lexical(paper_id, query, limit=limit)
         return self.retrieve_lexical(paper_id, query, limit=limit)
 
     def retrieve_lexical(self, paper_id: int, query: str, *, limit: int = 5) -> list[RetrievedChunk]:
@@ -80,7 +85,12 @@ class RetrievalService:
 
 
 def _terms(text: str) -> list[str]:
-    return [match.group(0).lower() for match in _WORD_RE.finditer(text)]
+    terms = [match.group(0).lower() for match in _WORD_RE.finditer(text)]
+    for run in _CJK_RUN_RE.findall(text):
+        terms.append(run)
+        if len(run) >= 2:
+            terms.extend(run[index : index + 2] for index in range(len(run) - 1))
+    return terms
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:

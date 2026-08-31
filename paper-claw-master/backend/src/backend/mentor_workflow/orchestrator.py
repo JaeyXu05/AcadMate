@@ -86,6 +86,7 @@ class MentorWorkflowOrchestrator:
         domain_agent: DomainExpertRunner | None = None,
         matching_agent: MatchingRunner | None = None,
         research_audit: ResearchAuditProvider | None = None,
+        checkpoint: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self.event_bus = event_bus or InMemoryEventBus()
@@ -102,6 +103,7 @@ class MentorWorkflowOrchestrator:
         )
         self.matching_agent = matching_agent or MatchingAgent()
         self.research_audit = research_audit
+        self.checkpoint = checkpoint
         self.review_agent = EvidenceReviewAgent()
         self.retry_controller = RetryController()
         self.composer_agent = ResultComposerAgent()
@@ -212,7 +214,11 @@ class MentorWorkflowOrchestrator:
             return self._fail(state, exc)
 
     def supplement(
-        self, trace_id: str, supplement: MentorWorkflowSupplement
+        self,
+        trace_id: str,
+        supplement: MentorWorkflowSupplement,
+        *,
+        run_immediately: bool = True,
     ) -> WorkflowState:
         state = self._required_state(trace_id)
         request_data = state.request.model_dump()
@@ -244,7 +250,9 @@ class MentorWorkflowOrchestrator:
             state.review_decision = None
             state.final_result = None
         state = self._commit(state)
-        return self.run(trace_id)
+        if run_immediately:
+            return self.run(trace_id)
+        return state
 
     def _run_review_loop(
         self, state: WorkflowState, enabled: set[str]
@@ -361,6 +369,36 @@ class MentorWorkflowOrchestrator:
             sender="workflow_orchestrator",
             receiver=self.research_agent.name,
         )
+        intent = _required_intent(state)
+        self._emit(
+            state,
+            WorkflowEventType.query_contract_ready,
+            sender="input_understanding_agent",
+            receiver="retrieval_manager_agent",
+            payload={
+                "raw_query": intent.query_contract.raw_query,
+                "canonical_query": intent.query_contract.canonical_query,
+                "must_preserve": intent.query_contract.must_preserve,
+                "concept_count": len(intent.query_contract.concepts),
+            },
+        )
+        self._emit(
+            state,
+            WorkflowEventType.retrieval_plan_ready,
+            sender="retrieval_manager_agent",
+            receiver=self.research_agent.name,
+            payload={
+                "canonical_query": intent.query_contract.canonical_query,
+                "recall_term_count": len(intent.query_contract.expanded_terms),
+            },
+        )
+        self._emit(
+            state,
+            WorkflowEventType.retriever_started,
+            sender="retrieval_manager_agent",
+            receiver=self.research_agent.name,
+            payload={"retriever": "local"},
+        )
         result = self._invoke(
             state.trace_id,
             WorkflowStage.mentor_research,
@@ -373,8 +411,32 @@ class MentorWorkflowOrchestrator:
         ledger.extend(result.evidence)
         state.evidence_ledger = ledger.list()
         state.candidates = result.candidates
+        state.retrieval_attempts = list(result.retrieval_attempts)
+        state.coverage_report = dict(result.coverage_report)
+        state.relation_judgements = list(result.relation_judgements)
         self._sync_research_audit(state)
         state = self._commit(state)
+        self._emit(
+            state,
+            WorkflowEventType.retriever_completed,
+            sender=self.research_agent.name,
+            receiver="retrieval_manager_agent",
+            payload={
+                "retrieval_attempts": result.retrieval_attempts,
+                "coverage_report": result.coverage_report,
+                "candidate_count": len(result.candidates),
+                "relation_judgement_count": len(result.relation_judgements),
+            },
+            evidence_refs=[record.evidence_id for record in result.evidence],
+        )
+        if result.used_fallback:
+            self._emit(
+                state,
+                WorkflowEventType.retrieval_retry,
+                sender="retrieval_manager_agent",
+                receiver=self.research_agent.name,
+                payload={"reason": "quality_gate_failed", "attempt_count": len(result.retrieval_attempts)},
+            )
         self._emit(
             state,
             WorkflowEventType.research_done,
@@ -384,7 +446,9 @@ class MentorWorkflowOrchestrator:
                 "candidate_count": len(state.candidates),
                 "new_evidence_count": len(result.evidence),
                 "used_fallback": result.used_fallback,
+                "retrieval_attempts": result.retrieval_attempts,
                 "warnings": result.warnings[:5],
+                "relation_judgement_count": len(result.relation_judgements),
             },
             evidence_refs=[record.evidence_id for record in result.evidence],
         )
@@ -608,7 +672,15 @@ class MentorWorkflowOrchestrator:
         return result
 
     def _commit(self, state: WorkflowState) -> WorkflowState:
-        return self.store.update_workflow(state, expected_version=state.state_version)
+        updated = self.store.update_workflow(
+            state, expected_version=state.state_version
+        )
+        self._checkpoint()
+        return updated
+
+    def _checkpoint(self) -> None:
+        if self.checkpoint is not None:
+            self.checkpoint()
 
     def _sync_research_audit(self, state: WorkflowState) -> None:
         if self.research_audit is not None:
@@ -637,6 +709,7 @@ class MentorWorkflowOrchestrator:
         )
         self.event_bus.publish(message)
         self.store.append_event(message)
+        self._checkpoint()
         logger.info(
             "mentor_workflow_event",
             extra={

@@ -61,6 +61,18 @@ class WorkflowEventType(StrEnum):
     result_ready = "RESULT_READY"
     workflow_completed = "WORKFLOW_COMPLETED"
     workflow_failed = "WORKFLOW_FAILED"
+    query_contract_ready = "QUERY_CONTRACT_READY"
+    retrieval_plan_ready = "RETRIEVAL_PLAN_READY"
+    retriever_started = "RETRIEVER_STARTED"
+    retriever_completed = "RETRIEVER_COMPLETED"
+    candidates_fused = "CANDIDATES_FUSED"
+    relation_judged = "RELATION_JUDGED"
+    coverage_insufficient = "COVERAGE_INSUFFICIENT"
+    retrieval_retry = "RETRIEVAL_RETRY"
+    entity_verified = "ENTITY_VERIFIED"
+    evidence_verified = "EVIDENCE_VERIFIED"
+    quality_gate_passed = "QUALITY_GATE_PASSED"
+    no_qualified_match = "NO_QUALIFIED_MATCH"
 
 
 class ReviewStatus(StrEnum):
@@ -199,6 +211,47 @@ class ClarificationRequest(BaseModel):
     reason: str
 
 
+class QueryConceptRole(StrEnum):
+    core_topic = "CORE_TOPIC"
+    method = "METHOD"
+    application_domain = "APPLICATION_DOMAIN"
+    research_object = "RESEARCH_OBJECT"
+    population = "POPULATION"
+    constraint = "CONSTRAINT"
+    negative_constraint = "NEGATIVE_CONSTRAINT"
+    mentor_name = "MENTOR_NAME"
+
+
+class QueryConcept(BaseModel):
+    """A single user-supplied concept kept intact through retrieval.
+
+    ``must_preserve`` is a hard query constraint.  Retrieval may add typed
+    aliases or subfields, but it may not replace this concept with a parent
+    such as ``人工智能``.
+    """
+
+    concept_id: str
+    surface: str
+    canonical: str
+    role: QueryConceptRole = QueryConceptRole.core_topic
+    required: bool = True
+    must_preserve: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    source: InputSource = InputSource.text
+
+
+class QueryContract(BaseModel):
+    raw_query: str = ""
+    canonical_query: str = ""
+    must_preserve: list[str] = Field(default_factory=list)
+    expanded_terms: list[str] = Field(default_factory=list)
+    excluded_generalizations: list[str] = Field(default_factory=list)
+    semantic_boundary: str | None = None
+    concepts: list[QueryConcept] = Field(default_factory=list)
+    logic: str = "OR"
+    version: int = 2
+
+
 class IntentPacket(BaseModel):
     trace_id: str
     goal: MentorGoal
@@ -214,6 +267,7 @@ class IntentPacket(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     raw_input_refs: list[str] = Field(default_factory=list)
     clarification_questions: list[str] = Field(default_factory=list)
+    query_contract: QueryContract = Field(default_factory=QueryContract)
 
 
 class PlanStep(BaseModel):
@@ -291,6 +345,11 @@ class EvidenceRecord(BaseModel):
     confidence: float = Field(ge=0, le=1)
     content_hash: str | None = None
     metadata: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    query: str | None = None
+    query_relevance: float = Field(default=0.0, ge=0, le=1)
+    entity_verified: bool | None = None
+    support_type: str = "UNASSESSED"
+    source_level: str = "L5"
 
     @model_validator(mode="after")
     def require_source_and_fact(self) -> EvidenceRecord:
@@ -309,7 +368,12 @@ class CandidateMentor(BaseModel):
     affiliation: str | None = None
     department: str | None = None
     research_topics: list[str] = Field(default_factory=list)
+    application_domains: list[str] = Field(default_factory=list)
     methods: list[str] = Field(default_factory=list)
+    topic_assertions: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
+    publication_topics: list[str] = Field(default_factory=list)
     publications: list[str] = Field(default_factory=list)
     projects: list[str] = Field(default_factory=list)
     homepage: str | None = None
@@ -331,8 +395,12 @@ class MatchDimensionScores(BaseModel):
     evidence_completeness: float = Field(ge=0, le=100)
 
     def mean_score(self) -> float:
-        values = list(self.model_dump().values())
-        return round(sum(values) / len(values), 2)
+        """Primary displayed/ranked score is research-topic match.
+
+        Empty method/application/background dimensions and default college or
+        evidence scores must not dilute or inflate this value into a fake 60%.
+        """
+        return round(self.research_topic_match, 2)
 
 
 class MatchResult(BaseModel):
@@ -345,6 +413,9 @@ class MatchResult(BaseModel):
     uncertainty: list[str] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
     ranking_position: int = Field(ge=1)
+    match_type: str = "UNASSESSED"
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
 
 
 class DomainJudgement(BaseModel):
@@ -392,6 +463,7 @@ class WorkflowErrorRecord(BaseModel):
 class FinalMentorResult(BaseModel):
     candidate: CandidateMentor
     match: MatchResult | None = None
+    evidence: list[EvidenceRecord] = Field(default_factory=list)
 
 
 class FinalResult(BaseModel):
@@ -404,6 +476,15 @@ class FinalResult(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     uncertainty: list[str] = Field(default_factory=list)
+    query_contract: QueryContract = Field(default_factory=QueryContract)
+    retrieval_attempts: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
+    quality_status: str = "PASS"
+    coverage_report: dict[str, Any] = Field(default_factory=dict)
+    relation_judgements: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -414,6 +495,13 @@ class MentorResearchResult(BaseModel):
     used_fallback: bool = False
     source_chain: list[str] = Field(default_factory=list)
     unresolved_candidate_ids: list[str] = Field(default_factory=list)
+    retrieval_attempts: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
+    coverage_report: dict[str, Any] = Field(default_factory=dict)
+    relation_judgements: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
 
 
 class ProjectResearchInterpretation(BaseModel):
@@ -547,6 +635,13 @@ class WorkflowState(BaseModel):
     task_plan: TaskPlan | None = None
     domain_judgements: list[DomainJudgement] = Field(default_factory=list)
     candidates: list[CandidateMentor] = Field(default_factory=list)
+    retrieval_attempts: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
+    coverage_report: dict[str, Any] = Field(default_factory=dict)
+    relation_judgements: list[dict[str, str | int | float | bool]] = Field(
+        default_factory=list
+    )
     evidence_ledger: list[EvidenceRecord] = Field(default_factory=list)
     match_results: list[MatchResult] = Field(default_factory=list)
     research_audit: ResearchAuditSnapshot | None = None

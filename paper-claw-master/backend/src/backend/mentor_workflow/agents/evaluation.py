@@ -5,6 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from backend.mentor_workflow.evidence import EvidenceLedger
+from backend.mentor_workflow.query_semantics import (
+    build_query_contract,
+    candidate_relevance,
+    qualifies,
+    relevance_threshold,
+)
 from backend.mentor_workflow.schemas import (
     CandidateMentor,
     EvidenceFreshness,
@@ -38,16 +44,25 @@ class MatchingAgent:
                 )
             if not candidate.evidence_refs:
                 raise ValueError(f"Candidate {candidate.candidate_id} has no evidence")
-            dimensions = MatchDimensionScores(
-                # 论文标题参与研究方向打分：研究方向字段缺失但论文明确对口的导师
-                # 不该得 0（RAG 中无 research_topics 的导师正是 C 回填前的常态）。
-                research_topic_match=_overlap_score(
+            contract = intent.query_contract
+            if not contract.canonical_query:
+                contract = build_query_contract(
+                    intent.raw_message,
                     intent.research_topics,
-                    _with_publications(candidate),
-                ),
+                    intent.methods,
+                    intent.application_domains,
+                )
+            topic_match, match_type, score_breakdown = candidate_relevance(
+                contract,
+                candidate,
+                fallback=bool(candidate.source_metadata.get("fallback")),
+            )
+            if not qualifies(topic_match, match_type):
+                continue
+            inferred_topic = int(candidate.source_metadata.get("topics_source") or 0) != 1
+            dimensions = MatchDimensionScores(
+                research_topic_match=topic_match,
                 method_match=_overlap_score(intent.methods, candidate.methods),
-                # 候选没有 application_domains 字段时，用研究方向+方法合计近似其
-                # 实际应用领域，语义上比只比对研究主题更贴合"想应用的方向"。
                 application_match=_overlap_score(
                     intent.application_domains,
                     [*candidate.research_topics, *candidate.methods],
@@ -59,9 +74,10 @@ class MatchingAgent:
                 evidence_completeness=_evidence_completeness(candidate),
             )
             overlap = _overlap(intent.research_topics, candidate.research_topics)
+            score_source = "calibrated absolute relevance"
             rationale = [
                 f"The evidence-backed profile shares {len(overlap)} requested research topic(s): {', '.join(overlap) or 'none explicitly recorded'}.",
-                "The total score is the arithmetic mean of eight independently reported dimensions.",
+                f"The displayed score is the research-topic match ({score_source}), not an eight-dimension average.",
             ]
             risks: list[str] = []
             uncertainty: list[str] = []
@@ -69,6 +85,11 @@ class MatchingAgent:
             if candidate.missing_fields:
                 uncertainty.append(
                     f"Unverified fields remain empty: {', '.join(sorted(candidate.missing_fields))}."
+                )
+            if inferred_topic:
+                uncertainty.append(
+                    "Research direction was inferred from paper titles "
+                    "(not official), so the topic match is discounted."
                 )
             if dimensions.research_topic_match < 50:
                 negative_factors.append(
@@ -87,8 +108,20 @@ class MatchingAgent:
                     negative_factors=negative_factors,
                     risks=risks,
                     uncertainty=uncertainty,
-                    evidence_refs=list(candidate.evidence_refs),
+                    evidence_refs=[
+                        reference
+                        for reference in candidate.evidence_refs
+                        if (record := ledger.get(reference)) is not None
+                        and record.candidate_id == candidate.candidate_id
+                        and record.entity_verified is True
+                        and record.source_level in {"L1", "L2", "L3"}
+                        and record.query_relevance >= 0.6
+                        and record.support_type in {"DIRECT", "ADJACENT"}
+                    ],
                     ranking_position=1,
+                    match_type=match_type,
+                    confidence=round(topic_match / 100.0, 4),
+                    score_breakdown=score_breakdown,
                 )
             )
         ranked = sorted(
@@ -115,11 +148,10 @@ class EvidenceReviewAgent:
         candidate_ids = [candidate.candidate_id for candidate in state.candidates]
         if not candidate_ids:
             return ReviewDecision(
-                status=ReviewStatus.research_again,
-                failed_checks=["candidate_presence"],
-                revision_target=RetryTarget.mentor_research,
-                revision_reason="No candidate mentors were found in available sources.",
-                reviewer_summary="Research must run again or fail in a controlled way after its retry budget.",
+                status=ReviewStatus.pass_,
+                reviewed_candidate_ids=[],
+                failed_checks=["no_qualified_match"],
+                reviewer_summary="无合格匹配：没有导师同时满足绝对相关性阈值与查询相关证据；不会用全库 Top-K 补满。",
             )
         ledger = EvidenceLedger(state.evidence_ledger)
         invalid_refs: list[str] = []
@@ -211,6 +243,43 @@ class EvidenceReviewAgent:
                 reviewer_summary="Recent sources are required for the affected facts.",
             )
         if state.intent.goal in {MentorGoal.find_mentors, MentorGoal.compare_mentors}:
+            weak_matches = [
+                match.candidate_id
+                for match in state.match_results
+                if match.total_score < relevance_threshold()
+                or match.match_type not in {"DIRECT", "ADJACENT"}
+                or not match.evidence_refs
+            ]
+            contradictions = [
+                candidate.candidate_id
+                for candidate in state.candidates
+                if not candidate.publications
+                and any(
+                    "paper" in record.source_type.casefold()
+                    or any(name in record.source_type.casefold() for name in ("openalex", "arxiv", "s2"))
+                    for record in state.evidence_ledger
+                    if record.candidate_id == candidate.candidate_id
+                    and record.source_level == "L3"
+                )
+            ]
+            if contradictions:
+                return ReviewDecision(
+                    status=ReviewStatus.revise,
+                    reviewed_candidate_ids=candidate_ids,
+                    failed_checks=[f"publication_count_contradiction:{candidate_id}" for candidate_id in contradictions],
+                    revision_target=RetryTarget.matching,
+                    revision_reason="Displayed publication count is empty while entity-verified paper evidence exists.",
+                    reviewer_summary="审核否决：论文计数字段与已绑定论文证据矛盾。",
+                )
+            if weak_matches:
+                return ReviewDecision(
+                    status=ReviewStatus.revise,
+                    reviewed_candidate_ids=candidate_ids,
+                    failed_checks=[f"query_evidence_entailment:{candidate_id}" for candidate_id in weak_matches],
+                    revision_target=RetryTarget.matching,
+                    revision_reason="A candidate lacks query-specific supporting evidence or misses the absolute relevance threshold.",
+                    reviewer_summary="Reviewer vetoed unsupported or parent-only matches.",
+                )
             inconsistency = _match_inconsistency(state.match_results, candidate_ids)
             if inconsistency:
                 return ReviewDecision(
@@ -365,7 +434,7 @@ def _with_publications(candidate: CandidateMentor) -> list[str]:
 
 def _overlap_score(requested: list[str], available: list[str]) -> float:
     if not requested:
-        return 50.0
+        return 0.0
     # 逐条查询项，取它在候选方向里能达到的最高语义重叠度（0..1），再取均值。
     # 用中文二元组 + 英文词元的词法重叠近似语义相似度：整词命中为 1.0，
     # "深度强化学习" vs"强化学习" 这类近义词也能给出足够高的分，避免精确子串把
@@ -384,7 +453,7 @@ def _overlap_score(requested: list[str], available: list[str]) -> float:
             best = 1.0  # 兼容旧的行内子串命中（如含标点的长句）
         per_item.append(best)
     if not per_item:
-        return 50.0
+        return 0.0
     return round(100.0 * sum(per_item) / len(per_item), 2)
 
 
@@ -426,21 +495,13 @@ def _recent_activity(candidate: CandidateMentor, ledger: EvidenceLedger) -> floa
         if age_years <= 5:
             return 70.0
         return 40.0
-    value = candidate.updated_at
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    age_days = (datetime.now(UTC) - value).days
-    if age_days <= 3 * 365:
-        return 100.0
-    if age_days <= 5 * 365:
-        return 70.0
-    return 40.0
+    return 0.0
 
 
 def _background_fit(intent: IntentPacket, candidate: CandidateMentor) -> float:
     profile_terms = [*intent.user_profile.background, *intent.user_profile.skills]
     if not profile_terms:
-        return 50.0
+        return 0.0
     return _overlap_score(
         profile_terms, [*candidate.research_topics, *candidate.methods]
     )
@@ -481,7 +542,7 @@ def _constraint_fit(intent: IntentPacket, candidate: CandidateMentor) -> float:
 
 def _recruitment_fit(intent: IntentPacket, candidate: CandidateMentor) -> float:
     if not intent.constraints.recruitment_required:
-        return 50.0 if candidate.recruitment_status is None else 100.0
+        return 0.0 if candidate.recruitment_status is None else 100.0
     if candidate.recruitment_status is None:
         return 20.0
     status = candidate.recruitment_status.casefold()

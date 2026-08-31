@@ -15,7 +15,48 @@ echo.
 rem ---- 1. cd to this script's folder (project root) ----
 cd /d "%~dp0"
 
-rem ---- 2. check Node.js ----
+rem ---- 2. prepare the shared Node/Python environment when available ----
+if exist "D:\Anaconda\envs\paper\node.exe" set "PATH=D:\Anaconda\envs\paper;D:\Anaconda\envs\paper\Scripts;%PATH%"
+
+rem ---- 3. start Docker/PostgreSQL dependency ----
+set "PAPER_CLAW_ROOT=%~dp0paper-claw-master"
+if exist "%PAPER_CLAW_ROOT%\docker-compose.yml" (
+    docker info >nul 2>nul
+    if errorlevel 1 (
+        if exist "C:\Program Files\Docker\Docker\Docker Desktop.exe" (
+            echo [2/6] Starting Docker Desktop...
+            start "" /b "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+            set DOCKER_READY=0
+            for /l %%i in (1,1,30) do (
+                docker info >nul 2>nul
+                if not errorlevel 1 set DOCKER_READY=1
+                if "!DOCKER_READY!"=="1" goto docker_ready
+                timeout /t 2 /nobreak >nul
+            )
+            :docker_ready
+        )
+    )
+    docker info >nul 2>nul
+    if errorlevel 1 echo [WARN] Docker engine unavailable; A端数据库可能无法启动。
+    if not errorlevel 1 (
+        pushd "%PAPER_CLAW_ROOT%"
+        docker compose up -d postgres
+        if errorlevel 1 echo [WARN] PostgreSQL container failed to start.
+        if exist "D:\Anaconda\envs\paper\Scripts\uv.exe" (
+            echo [3/6] Applying A端 database migrations...
+            call "D:\Anaconda\envs\paper\Scripts\uv.exe" run --project backend alembic -c backend/alembic.ini upgrade head
+        )
+        if not exist "D:\Anaconda\envs\paper\Scripts\uv.exe" echo [WARN] uv not found; skip A端 migration.
+        netstat -ano | findstr ":8000" >nul 2>nul
+        if errorlevel 1 (
+            echo [4/6] Starting PaperClaw A端...
+            if exist "D:\Anaconda\envs\paper\Scripts\uv.exe" start "PaperClaw A" /min cmd /d /c "cd /d ""%PAPER_CLAW_ROOT%"" && ""D:\Anaconda\envs\paper\Scripts\uv.exe"" run --project backend uvicorn backend.api.app:create_app --factory --reload --host 0.0.0.0 --port 8000"
+        ) else echo [4/6] PaperClaw A端 already running.
+        popd
+    )
+) else echo [WARN] paper-claw-master not found; skip A端 startup.
+
+rem ---- 5. check Node.js ----
 where node >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] Node.js not found. Please install Node.js 18+:
@@ -24,7 +65,7 @@ if errorlevel 1 (
     exit /b 1
 )
 for /f "delims=" %%v in ('node -v') do set NODE_VER=%%v
-echo [1/4] Node.js version: %NODE_VER%
+    echo [1/6] Node.js version: %NODE_VER%
 
 rem ---- 3. enter Code/ ----
 pushd "%~dp0Code"
@@ -39,14 +80,14 @@ rem ---- 4. ensure .env exists ----
 if not exist ".env" (
     if exist ".env.example" (
         copy /y ".env.example" ".env" >nul
-        echo [2/4] Created .env from .env.example.
+        echo [5/6] Created .env from .env.example.
     ) else (
         echo [ERROR] .env.example missing.
         pause
         popd & exit /b 1
     )
 ) else (
-    echo [2/4] .env already exists.
+    echo [5/6] .env already exists.
 )
 
 rem ---- 5. check deps installed ----
@@ -56,7 +97,7 @@ if not exist "node_modules\.bin\tsx.cmd" (
 )
 
 if "%NEED_INSTALL%"=="1" (
-    echo [3/4] First run - installing dependencies, please wait...
+    echo [5/6] First run - installing dependencies, please wait...
     call npm install
     if errorlevel 1 (
         echo.
@@ -67,11 +108,11 @@ if "%NEED_INSTALL%"=="1" (
         popd & exit /b 1
     )
 ) else (
-    echo [3/4] Dependencies already installed.
+    echo [5/6] Dependencies already installed.
 )
 
 rem ---- 6. open browser after 6s ----
-echo [4/4] Starting services and opening browser...
+echo [6/6] Starting D端前后端 and opening browser...
 start "" /b cmd /c "timeout /t 6 /nobreak >nul & start http://localhost:5173"
 
 rem ---- 7. run dev server (frontend + backend) ----

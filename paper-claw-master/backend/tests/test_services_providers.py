@@ -102,7 +102,9 @@ def test_resolve_api_key_missing_env():
 def test_settings_default_storage_root():
     settings = Settings()
 
-    assert REPO_ROOT.name == "paper-claw"
+    # 仓库 clone 目录名可能是 `paper-claw` 或带 `-master` 后缀（如
+    # `paper-claw-master`），只断言前缀而不绑死具体目录名。
+    assert REPO_ROOT.name.startswith("paper-claw")
     assert settings.data_dir == REPO_ROOT / "data"
     assert settings.storage_root == REPO_ROOT / "data" / "files"
 

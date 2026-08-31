@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { Upload, Button, App } from 'antd';
-import { UploadOutlined, FilePdfOutlined } from '@ant-design/icons';
+import { Upload as UploadIcon, File } from 'lucide-react';
 import type { UploadProps } from 'antd';
 import { uploadPdf } from '../services/pdf';
 
 interface PdfUploaderProps {
   /** 上传成功后回传 upload_id 与文件名 */
-  onUploaded: (upload_id: string, filename: string) => void;
+  onUploaded?: (upload_id: string, filename: string) => void;
   /** 上传中状态切换（可选） */
   onUploadingChange?: (uploading: boolean) => void;
+  uploadFn?: (file: File) => Promise<{ upload_id: string; filename: string }>;
 }
 
 /**
@@ -16,7 +17,7 @@ interface PdfUploaderProps {
  * 阻止 AntD 默认的内部上传行为。上传成功后通过 onUploaded 回传 upload_id。
  * 不使用拖拽区，保持上传入口轻量。
  */
-function PdfUploader({ onUploaded, onUploadingChange }: PdfUploaderProps) {
+function PdfUploader({ onUploaded, onUploadingChange, uploadFn }: PdfUploaderProps) {
   const { message } = App.useApp();
   const [uploading, setUploading] = useState(false);
 
@@ -46,9 +47,14 @@ function PdfUploader({ onUploaded, onUploadingChange }: PdfUploaderProps) {
       setUploading(true);
       onUploadingChange?.(true);
       try {
-        const res = await uploadPdf(file as File);
+        const res = uploadFn
+          ? await uploadFn(file as File)
+          : await uploadPdf(file as File);
+        const localName = typeof file === 'object' && file && 'name' in file
+          ? String((file as File).name || '')
+          : '';
         onSuccess?.(res);
-        onUploaded(res.upload_id, res.filename);
+        onUploaded?.(res.upload_id, localName || res.filename);
         message.success(`已上传：${res.filename}`);
       } catch (err) {
         onError?.(err as Error);
@@ -67,12 +73,12 @@ function PdfUploader({ onUploaded, onUploadingChange }: PdfUploaderProps) {
   return (
     <div>
       <Upload {...uploadProps} disabled={uploading}>
-        <Button icon={<UploadOutlined />} loading={uploading}>
+        <Button icon={<UploadIcon size={14} strokeWidth={1.5} className="text-slate-600" />} loading={uploading}>
           选择 PDF 文件
         </Button>
       </Upload>
-      <div style={{ marginTop: 8, color: 'rgba(255,255,255,0.4)', fontSize: 13 }}>
-        <FilePdfOutlined style={{ marginRight: 6 }} />
+      <div className="mt-2 text-[13px] text-slate-500">
+        <File size={14} strokeWidth={1.5} className="mr-1.5 inline text-slate-600" />
         支持 PDF 格式，单文件不超过 20MB
       </div>
     </div>

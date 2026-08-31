@@ -17,6 +17,7 @@ from backend.mentor_workflow.schemas import (
     ToolBudget,
     WorkflowState,
 )
+from backend.mentor_workflow.query_semantics import build_query_contract
 
 
 class InputUnderstandingAgent:
@@ -26,22 +27,25 @@ class InputUnderstandingAgent:
         self, request: MentorWorkflowRequest, state: WorkflowState
     ) -> tuple[IntentPacket, ClarificationRequest | None]:
         goal = request.goal or _detect_goal(request.message)
-        topics = _unique(
-            [
-                *request.research_topics,
-                *[
-                    topic
-                    for document in request.parsed_documents
-                    for topic in document.research_topics
-                ],
-                *[
-                    topic
-                    for trace in request.interaction_traces
-                    for topic in trace.research_topics
-                ],
-                *_topics_from_text(request.message),
-            ]
-        )
+        message_topics = _topics_from_text(request.message)
+        document_topics = [
+            topic
+            for document in request.parsed_documents
+            for topic in document.research_topics
+        ]
+        trace_topics = [
+            topic
+            for trace in request.interaction_traces
+            for topic in trace.research_topics
+        ]
+        # Current-turn text wins. Historical growth stuffed into
+        # request.research_topics must not be merged as equal intent.
+        if message_topics:
+            topics = _unique([*document_topics, *trace_topics, *message_topics])
+        else:
+            topics = _unique(
+                [*request.research_topics, *document_topics, *trace_topics]
+            )
         methods = _unique(
             [
                 *request.methods,
@@ -115,6 +119,12 @@ class InputUnderstandingAgent:
                 ]
             ),
             clarification_questions=questions,
+            query_contract=build_query_contract(
+                request.message,
+                _unique([*topics, *request.research_topics]),
+                methods,
+                applications,
+            ),
         )
         clarification = None
         if missing:
@@ -200,27 +210,101 @@ def _detect_goal(message: str) -> MentorGoal:
     return MentorGoal.find_mentors
 
 
+_BOILERPLATE_QUERIES = {
+    "帮我找导师",
+    "找导师",
+    "推荐导师",
+    "搜索导师",
+    "检索导师",
+    "我想找导师",
+    "找一下导师",
+    "please find mentors",
+    "find mentors",
+    "find a mentor",
+    "recommend mentors",
+}
+_BARE_REQUEST = re.compile(
+    r"^(?:请(?:问|帮我)?|麻烦|帮我)?"
+    r"(?:想要?)?"
+    r"(?:找(?:一下|一找)?|推荐|搜索|检索)?"
+    r"(?:一下)?"
+    r"(?:导师|老师|教授|博导)s?$",
+    re.IGNORECASE,
+)
+_QUERY_PREFIX = re.compile(
+    r"^(?:请(?:问|帮我)?|麻烦|帮我)?"
+    r"(?:想要?)?"
+    r"(?:找(?:一下|一找)?|推荐|搜索|检索)"
+    r"(?:一下)?"
+    r"(?:做|研究)?",
+    re.IGNORECASE,
+)
+_QUERY_SUFFIX = re.compile(r"(?:的)?(?:导师|老师|教授|博导)s?$", re.IGNORECASE)
+
+
 def _topics_from_text(message: str) -> list[str]:
-    broad = {"帮我找导师", "找导师", "推荐导师", "please find mentors", "find mentors"}
-    normalized = " ".join(message.casefold().split()).strip("。.!！?")
-    if normalized in broad:
+    """A search-box query is itself a topic. Clarification only if there is no subject."""
+    if _is_boilerplate_query(message):
         return []
+    extracted = _topics_from_patterns(message)
+    if extracted:
+        return extracted
+    leftover = _bare_query_topic(message)
+    return [leftover] if leftover else []
+
+
+def _topics_from_patterns(message: str) -> list[str]:
     patterns = [
-        r"(?:做|研究|方向(?:是|为)?|关注)([^，,。；;]{2,80}?)(?:的导师|的老师|方向|，|,|。|；|;|$)",
+        r"(?:做|研究|关注|方向(?:是|为))([^，,。；;]{2,80}?)(?:的导师|的老师|的博导|方向|，|,|。|；|;|$)",
+        r"(?:找|推荐|搜索|检索)(?:做|研究)?([^，,。；;]{2,40}?)(?:方向)?(?:的)?(?:导师|老师|教授|博导)",
         r"(?:in|on) ([a-z][a-z0-9\- ]{2,80}?)(?: mentors?| professors?|,|\.|$)",
     ]
+    junk = {"的博导", "的导师", "的老师", "的教授"}
     topics: list[str] = []
     for pattern in patterns:
         for match in re.finditer(pattern, message, flags=re.IGNORECASE):
             value = match.group(1).strip()
             for part in re.split(r"[、/]|\band\b", value):
                 cleaned = part.strip()
-                if cleaned and not any(
-                    marker in cleaned
-                    for marker in ("偏理论", "愿意带", "本科生", "招生", "学院")
+                if (
+                    cleaned
+                    and cleaned not in junk
+                    and not any(
+                        marker in cleaned
+                        for marker in ("偏理论", "愿意带", "本科生", "招生", "学院")
+                    )
                 ):
                     topics.append(cleaned)
     return _unique(topics)
+
+
+def _is_boilerplate_query(message: str) -> bool:
+    normalized = _normalize_query(message).casefold()
+    if not normalized:
+        return True
+    if normalized in _BOILERPLATE_QUERIES:
+        return True
+    return bool(_BARE_REQUEST.fullmatch(normalized))
+
+
+def _bare_query_topic(message: str) -> str | None:
+    text = _normalize_query(message)
+    if not text or _is_boilerplate_query(text) or len(text) < 2:
+        return None
+    looks_like_request = bool(_QUERY_SUFFIX.search(text)) or bool(
+        re.match(r"^(?:请(?:问|帮我)?|麻烦|帮我|找|搜索|检索)", text)
+    )
+    stripped = text
+    if looks_like_request:
+        stripped = _QUERY_PREFIX.sub("", text, count=1).strip()
+        stripped = _QUERY_SUFFIX.sub("", stripped).strip(" ，,的")
+    if not stripped or _is_boilerplate_query(stripped) or len(stripped) < 2:
+        return None
+    return stripped
+
+
+def _normalize_query(message: str) -> str:
+    return " ".join(message.split()).strip("。.!！?？,，")
 
 
 def _missing_fields(

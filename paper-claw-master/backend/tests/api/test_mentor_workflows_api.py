@@ -21,15 +21,21 @@ class OfflineResearchTool:
         evidence = EvidenceRecord(
             evidence_id="ev-api-1",
             candidate_id="mentor-api-1",
-            source_type="fixture",
+            source_type="ustc_official_faculty_profile",
             source_uri="fixture://mentor-api-1",
             title="Verified MARL Paper",
             extracted_fact="Professor A authored verified work on multi-agent reinforcement learning.",
             locator="fixture:1",
             freshness=EvidenceFreshness.current,
             confidence=0.95,
+            query="multi-agent reinforcement learning",
+            query_relevance=0.92,
+            entity_verified=True,
+            support_type="DIRECT",
+            source_level="L1",
             metadata={
                 "identity_verified": True,
+                "mentor_role_verified": True,
                 "supports_fields": "research_topics,methods,publications",
             },
         )
@@ -52,6 +58,7 @@ class OfflineResearchTool:
                         "homepage",
                         "recruitment_status",
                     ],
+                    source_metadata={"topics_source": 1},
                 )
             ],
             evidence=[evidence],

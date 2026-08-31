@@ -471,3 +471,4 @@ class PaperClawContext:
     rate_limiter: Any | None = None
     chat_provider_name: str | None = None
     embedding_provider_name: str | None = None
+    extra_instructions: str | None = None

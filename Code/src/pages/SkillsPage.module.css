@@ -1,0 +1,18 @@
+.page { min-height: 100%; padding: 42px 48px 36px; color: #1c1917; }
+.header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+.kicker { color: #94a3b8; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .15em; }
+.header h1 { margin: 4px 0 6px; font-size: 27px; font-weight: 600; }
+.header p { margin: 0; color: #78716c; font-size: 14px; }
+.notice { display: flex; align-items: center; gap: 8px; padding: 12px 14px; margin-bottom: 18px; border: 1px solid #dbeafe; border-radius: 10px; background: #eff6ff; color: #475569; font-size: 13px; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.card { padding: 18px; border: 1px solid rgba(148,163,184,.22); border-radius: 14px; background: rgba(255,255,255,.75); }
+.cardHead { display: flex; align-items: flex-start; gap: 9px; color: #64748b; }
+.cardHead div { flex: 1; min-width: 0; }
+.cardHead h2 { margin: 0 0 3px; color: #292524; font-size: 16px; font-weight: 600; }
+.cardHead span { color: #a8a29e; font-size: 11px; }
+.card p { min-height: 40px; color: #78716c; font-size: 13px; line-height: 1.55; }
+.permissions { display: flex; flex-wrap: wrap; gap: 4px; min-height: 28px; }
+.actions { display: flex; gap: 8px; margin-top: 14px; }
+.form { display: grid; gap: 12px; }
+.loading { padding: 80px; text-align: center; color: #a8a29e; }
+@media (max-width: 760px) { .page { padding: 24px 16px; } .header { display: block; } .header button { margin-top: 14px; } .grid { grid-template-columns: 1fr; } }

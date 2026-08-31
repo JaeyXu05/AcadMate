@@ -11,8 +11,21 @@ export async function uploadPdf(file: File): Promise<PdfUploadResponse> {
   return data;
 }
 
-/** 分析已上传的 PDF */
+/** 须覆盖 D 端 MENTOR_AGENT_TIMEOUT_MS（默认 420s）+ PDF 抽文本，避免 axios 先 abort 成假超时 */
+export const ANALYZE_TIMEOUT_MS = 8 * 60 * 1000;
+
+/** 分析已上传的 PDF；语义检索 + 模型重排通常需要数分钟 */
 export async function analyzePdf(upload_id: string): Promise<PdfAnalysisResult> {
-  const { data } = await api.post<PdfAnalysisResult>('/pdf/analyze', { upload_id });
-  return data;
+  const { data } = await api.post<PdfAnalysisResult>(
+    '/pdf/analyze',
+    { upload_id },
+    { timeout: ANALYZE_TIMEOUT_MS },
+  );
+  return {
+    ...data,
+    suggestedAdvisors: (data.suggestedAdvisors ?? []).map((item) => ({
+      ...item,
+      scoreKind: item.scoreKind || data.scoreKind || 'calibrated_pdf_relevance',
+    })),
+  };
 }

@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -184,6 +185,112 @@ def _strip_html(value: str) -> str:
     return re.sub(r"<[^>]+>", "", value).strip()
 
 
+# ---------------------------------------------------------------------------
+# 从官网个人主页 profile_text 抽取富信息（bio / email / 办公地点 / 毕业院校）。
+# 此前 build 完全丢弃 profile_text，导致详情页 bio/contact 与更多方向全部缺失。
+# 这些是纯文本富信息，抽取结果写入 source_metadata（标量 dict，符合 schema），
+# 不改 CandidateMentor schema、不改 A/C 输出格式；D 侧 ragAdvisors.ts 读键拼接。
+# ---------------------------------------------------------------------------
+
+_EMAIL_RE = re.compile(
+    r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*@[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*\.[A-Za-z]{2,}"
+)
+_EMAIL_BLACKLIST = (
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".css", ".js",
+    "@w3.org", "@example", "noreply", "no-reply",
+)
+
+
+def _extract_email(text: str) -> str | None:
+    """从个人主页正文抽取首个可信 email（过滤图片/站务噪声）。"""
+    for email in _EMAIL_RE.findall(text or ""):
+        low = email.lower()
+        if any(bad in low for bad in _EMAIL_BLACKLIST):
+            continue
+        return email
+    return None
+
+
+# 基本信息区里以「中文标签 + 冒号」出现的键值行，不属于 bio 正文。
+_BIO_KEY_VALUE_LABELS = (
+    "教师英文名称", "电子邮箱", "邮箱", "E-mail", "Email", "职务",
+    "办公地点", "办公地址", "毕业院校", "联系电话", "电话", "传真",
+    "职称", "学历", "学位", "通讯地址", "办公室", "主页", "Homepage",
+    "个人主页", "个人网站",
+)
+
+# 个人主页顶部/底部的站务噪声整行或整段匹配，bio 里直接丢弃。
+_BIO_NOISE_LINES = {
+    "首页", "科学研究", "教学信息", "团队成员", "获奖信息",
+    "招生信息", "导航", "登录", "English", "教师个人主页",
+    "查看更多", "暂无内容", "网站访问量",
+}
+_BIO_NOISE_SUBSTRINGS = (
+    "扫描手机二维码", "手机扫描二维码", "即可访问本教师主页", "欢迎您的访问",
+    "您是第", "位访客", "开通时间", "访问量", "手机版",
+)
+
+
+def _extract_bio(profile_text: str, name: str, max_len: int = 600) -> str | None:
+    """从个人主页正文抽一段可读的导师简介（去导航/键值/footer）。
+
+    策略：按行清洗，去掉站点导航、QR 码提示、访客计数字样、底部版权、
+    「标签:值」键值行与标题面包屑，保留含导师姓名的连贯散文段落。
+    """
+    text = (profile_text or "").strip()
+    if not text:
+        return None
+
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = " ".join(raw_line.split()).strip()
+        if not line:
+            continue
+        if _is_boilerplate_topic(line):
+            continue
+        if line in _BIO_NOISE_LINES:
+            continue
+        if any(marker in line for marker in _BIO_NOISE_SUBSTRINGS):
+            continue
+        # 标题面包屑「中国科学技术大学 曾晋哲--曾晋哲--首页」这类含 "--" 的标题行。
+        if "--" in line and (name in line or "首页" in line):
+            continue
+        # 同专业博导/硕导的英文占位「P同专业博导」「M同专业硕导」。
+        if re.fullmatch(r"[PM]同专业[博硕]导", line):
+            continue
+        # 「标签:值」键值行跳过（邮箱哈希/办公地点等）与未知标签。
+        if re.match(r"^[^：:]{1,10}[:：]", line):
+            label = re.split(r"[:：]", line, maxsplit=1)[0].strip()
+            if any(kw in label for kw in _BIO_KEY_VALUE_LABELS):
+                continue
+            continue  # 其它「标签:值」行同样非散文，一并丢弃
+        lines.append(line)
+
+    cleaned = "\n".join(lines)
+    # 底部版权 footer 之后的内容截断。
+    cleaned = re.split(r"(?:版权所有|Copyright|©)\s*©?[0-9]*", cleaned)[0].strip()
+    if not cleaned:
+        return None
+
+    bio = cleaned
+    if len(bio) > max_len:
+        bio = bio[:max_len].rstrip("，,；;、 \t")
+    if len(bio) < 20:
+        return None
+    return bio
+
+
+def _extract_office(profile_text: str) -> str | None:
+    m = re.search(r"(?:办公地点|办公地址)[:：]?\s*([^\n]{2,60})", profile_text or "")
+    return " ".join(m.group(1).split()).strip() if m else None
+
+
+def _extract_graduated_from(profile_text: str) -> str | None:
+    m = re.search(r"(?:毕业院校)[:：]?\s*([^\n]{2,60})", profile_text or "")
+    return " ".join(m.group(1).split()).strip() if m else None
+
+
+
 _METHOD_KEYWORDS = [
     "deep learning", "reinforcement learning", "neural network",
     "transformer", "graph neural", "convolutional", "diffusion model",
@@ -220,12 +327,44 @@ _BOILERPLATE_TOPIC_MARKERS = (
     "科技成果转化",
     "获奖信息",
     "招生信息",
+    "邮政编码",
+    "手机版",
 )
 _BOILERPLATE_TOPIC_EXACT = {"more", "gallery", "news", "vacancy"}
+_POSTAL_CODE_TOPIC = re.compile(r"(?:邮\s*编|邮政编码).{0,12}\d{5,6}|^\d{6}$")
+
+# 「成果/项目/荣誉」句判别：与 ustc_scraper._is_achievement_topic 同源。
+# raw 已抓取的 research_topics 里混有项目/基金/获奖叙述（方向段后内联、无换行），
+# 离线重跑 build 时也必须二次过滤，否则污染照旧进入检索向量。
+_ACHIEVEMENT_TOPIC_MARKERS = (
+    "主持", "参与", "承担", "在研", "立项", "结题",
+    "基金", "项目", "课题", "获", "奖", "荣誉", "评选",
+    "基金资助", "课题资助", "项目资助", "人才项目", "人才计划",
+    "国家自科", "国家自然科学", "国家自然科学", "国自然", "国家社科", "国家重点研发",
+    "国家杰青", "杰青", "优青", "面上项目", "青年科学基金", "青年项目",
+    "重点专项", "重大专项", "重大研究计划", "研究计划",
+    "获奖", "荣获", "荣誉", "奖项", "入选", "学会优秀", "取得了",
+    "发表", "论文", "专利", "授权", "著作", "出版",
+    "案例入库", "案例", "担任", "主编", "编委",
+)
+_ACHIEVEMENT_SOFT_MARKERS = ("项目", "计划", "获奖", "论文")
+
+
+def _is_achievement_topic(topic: str) -> bool:
+    text = " ".join(str(topic).split())
+    if not text:
+        return True
+    hard = [m for m in _ACHIEVEMENT_TOPIC_MARKERS if m in text]
+    if hard:
+        return True
+    soft = [m for m in _ACHIEVEMENT_SOFT_MARKERS if m in text]
+    return len(soft) >= 2
 
 
 def _is_boilerplate_topic(topic: str) -> bool:
     if topic.casefold() in _BOILERPLATE_TOPIC_EXACT:
+        return True
+    if _POSTAL_CODE_TOPIC.search(topic):
         return True
     return any(marker in topic for marker in _BOILERPLATE_TOPIC_MARKERS)
 
@@ -331,6 +470,15 @@ def build_mentor(
     evidence: list[dict] = []
     warnings: list[str] = []
 
+    # 从官网个人主页富文本抽取 bio / email / 办公地点 / 毕业院校（此前完全被丢弃）。
+    profile_text = mentor.get("profile_text") or ""
+    profile_email = _extract_email(profile_text)
+    profile_bio = _extract_bio(profile_text, name)
+    profile_office = _extract_office(profile_text)
+    profile_graduated_from = _extract_graduated_from(profile_text)
+    if not profile_email and "@" in profile_text:
+        warnings.append(f"{name} 官网个人主页存在邮箱但为非明文（站方加密），未抽取到 email")
+
     # 1) 身份证据：官方教师目录。
     role = mentor.get("mentor_role", "")
     identity_fact = (
@@ -366,6 +514,7 @@ def build_mentor(
         topic
         for topic in (mentor.get("research_topics") or [])
         if not _is_boilerplate_topic(topic)
+        and not _is_achievement_topic(topic)
     ]
     recruitment = mentor.get("recruitment_status")
 
@@ -504,6 +653,26 @@ def build_mentor(
             seen.add(k)
             merged_methods.append(m)
 
+    # source_metadata 只允许标量(str/int/float/bool)，None 值会触发 schema 校验失败，
+    # 故富信息抽不到时不落键（保持精炼）。
+    source_metadata = {
+        "ustc_faculty_id": faculty_id,
+        "english_name": mentor.get("english_name", ""),
+        "academic_title": mentor.get("academic_title", ""),
+        "mentor_role": role,
+        # A 后端 CandidateMentor.source_metadata 仅允许标量(str/int/float/bool)，
+        # 故把平台列表序列化为逗号分隔字符串（如 "openalex,s2,dblp"），避免 RAG 校验失败。
+        "paper_platforms": ",".join(kept_platforms),
+        # 1 = 官网抓到，2 = 论文回填，0 = 无方向。供云图/检索区分数据来源。
+        "topics_source": 2 if backfilled_topics else (1 if topics_from_profile else 0),
+        # 从官网个人主页富文本抽取的展示用富信息（D 侧详情页 bio/contact/recruiting 读取）。
+        "profile_bio": profile_bio,
+        "profile_email": profile_email,
+        "profile_office": profile_office,
+        "profile_graduated_from": profile_graduated_from,
+    }
+    source_metadata = {k: v for k, v in source_metadata.items() if v is not None}
+
     candidate = {
         "candidate_id": candidate_id,
         "mentor_name": name,
@@ -517,17 +686,7 @@ def build_mentor(
         "recruitment_status": recruitment,
         "evidence_refs": evidence_refs,
         "missing_fields": [],
-        "source_metadata": {
-            "ustc_faculty_id": faculty_id,
-            "english_name": mentor.get("english_name", ""),
-            "academic_title": mentor.get("academic_title", ""),
-            "mentor_role": role,
-            # A 后端 CandidateMentor.source_metadata 仅允许标量(str/int/float/bool)，
-            # 故把平台列表序列化为逗号分隔字符串（如 "openalex,s2,dblp"），避免 RAG 校验失败。
-            "paper_platforms": ",".join(kept_platforms),
-            # 1 = 官网抓到，2 = 论文回填，0 = 无方向。供云图/检索区分数据来源。
-            "topics_source": 2 if backfilled_topics else (1 if topics_from_profile else 0),
-        },
+        "source_metadata": source_metadata,
         "updated_at": _utcnow_iso(),
     }
     # 计算 missing_fields（与后端 _candidate_missing_fields 一致）。

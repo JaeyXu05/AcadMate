@@ -21,10 +21,11 @@ from backend.db.session import get_session
 from backend.db.types import EventLevel, MessageRole, MessageSource, RunStatus, WorkflowName
 from backend.schemas import AgentMessageRequest, AgentMessageResponse, AgentStreamEvent, ApprovalRequest, RunEventRead, RunRead
 from backend.settings import Settings, get_settings
-from backend.tools.context import tool_runtime_context
+from backend.tools.context import tool_runtime_context, tool_session
 
 STREAM_MODES = ["messages", "updates"]
 STALE_RUNNING_RUN_AFTER = timedelta(minutes=20)
+EMPTY_ASSISTANT_FALLBACK = "这次没有生成可见文字回复。请再试一次，或改用论文检索。"
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ def submit_agent_message(session: Session, request: AgentMessageRequest) -> Agen
 
 
 def execute_agent_run(run_id: int) -> None:
-    with get_session() as session:
+    with tool_session() as session:
         prepared, request = prepare_prepared_agent_run(session, run_id)
         for _event in _stream_agent_graph(session, prepared, request, {"messages": [{"role": "user", "content": request.message}]}):
             pass
@@ -55,7 +56,7 @@ def execute_agent_run(run_id: int) -> None:
 
 
 def execute_agent_run_resume(run_id: int, request: ApprovalRequest) -> None:
-    with get_session() as session:
+    with tool_session() as session:
         if request.decision == "cancel":
             cancel_run(session, run_id)
             return
@@ -106,6 +107,7 @@ def prepare_prepared_agent_run(session: Session, run_id: int) -> tuple[PreparedA
     input_json = dict(run.input_json or {})
     input_json.pop("has_api_key", None)
     message_request = AgentMessageRequest.model_validate({"message": input_json.get("message") or "", **input_json})
+    _ensure_thread_owner(thread, message_request)
     active_paper_id = thread.current_focus_paper_id
     if input_json.get("active_paper_id") is not None:
         active_paper_id = int(input_json["active_paper_id"])
@@ -135,6 +137,7 @@ def prepare_agent_run_resume(session: Session, run_id: int, request: ApprovalReq
     input_json = dict(run.input_json or {})
     input_json.pop("has_api_key", None)
     message_request = AgentMessageRequest.model_validate({"message": input_json.get("message") or "", **input_json})
+    _ensure_thread_owner(thread, message_request)
     active_paper_id = thread.current_focus_paper_id
     if input_json.get("active_paper_id") is not None:
         active_paper_id = int(input_json["active_paper_id"])
@@ -164,18 +167,19 @@ def _stream_agent_graph(session: Session, prepared: PreparedAgentRun, request: A
     try:
         agent = create_paper_claw_agent()
         context = _agent_context(prepared, request)
+        agent_config = {
+            "configurable": {"thread_id": prepared.deepagent_thread_id},
+            "metadata": {
+                "assistant_id": "paper-claw",
+                "paper_claw_thread_id": prepared.thread_id,
+                "paper_claw_run_id": prepared.run_id,
+            },
+        }
         with tool_runtime_context(context):
             chunks = iter(
                 agent.stream(
                     graph_input,
-                    config={
-                        "configurable": {"thread_id": prepared.deepagent_thread_id},
-                        "metadata": {
-                            "assistant_id": "paper-claw",
-                            "paper_claw_thread_id": prepared.thread_id,
-                            "paper_claw_run_id": prepared.run_id,
-                        },
-                    },
+                    config=agent_config,
                     context=context,
                     stream_mode=STREAM_MODES,
                     subgraphs=True,
@@ -256,7 +260,12 @@ def _stream_agent_graph(session: Session, prepared: PreparedAgentRun, request: A
                 payload={"status": run.status, "error": run.error_message},
             )
             return
-        message_text = last_message_text or "".join(message_parts)
+        message_text = (last_message_text or "".join(message_parts)).strip()
+        if not message_text:
+            with tool_runtime_context(context):
+                message_text = _assistant_text_from_agent_state(agent, agent_config)
+        if not message_text:
+            message_text = EMPTY_ASSISTANT_FALLBACK
         assistant_message = ThreadRepository(session).add_message(
             thread.id,
             MessageRole.assistant.value,
@@ -326,13 +335,26 @@ def _stream_agent_graph(session: Session, prepared: PreparedAgentRun, request: A
 def prepare_agent_message_run(session: Session, request: AgentMessageRequest) -> PreparedAgentRun:
     threads = ThreadRepository(session)
     runs = AgentRunRepository(session)
+    owner_key = _request_owner_key(request)
     thread = threads.get(request.thread_id) if request.thread_id is not None else None
     if request.thread_id is not None and thread is None:
         raise ValueError("Thread not found")
     if thread is None:
-        thread = threads.create(_thread_title(request.message), deepagent_thread_id=_new_deepagent_thread_id())
+        metadata_json: dict[str, Any] = {"surface": request.metadata.get("surface", "paperclaw")}
+        if owner_key:
+            metadata_json["owner_key"] = owner_key
+        if request.metadata.get("conversation_id") is not None:
+            metadata_json["conversation_id"] = str(request.metadata["conversation_id"])
+        if request.metadata.get("project_id") is not None:
+            metadata_json["project_id"] = str(request.metadata["project_id"])
+        thread = threads.create(
+            _thread_title(request.message),
+            deepagent_thread_id=_new_deepagent_thread_id(),
+            metadata_json=metadata_json,
+        )
     elif thread.deepagent_thread_id is None:
         thread.deepagent_thread_id = _new_deepagent_thread_id()
+    _ensure_thread_owner(thread, request)
     active_paper_id = _resolve_active_paper_id(session, thread, request)
     active_paper_system_info = _active_paper_system_info(session, active_paper_id)
     threads.add_message(thread.id, MessageRole.user.value, request.message, source=MessageSource.human.value)
@@ -501,6 +523,12 @@ def _agent_context(prepared: PreparedAgentRun, request: AgentMessageRequest) -> 
         provider_name = "settings-chat"
     if not model or not model.strip():
         raise ValueError("PAPER_CLAW_CHAT_MODEL is not set.")
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    extra_instructions = metadata.get("extra_instructions")
+    if not isinstance(extra_instructions, str):
+        extra_instructions = None
+    if extra_instructions:
+        extra_instructions = extra_instructions.strip()[:6000]
     return PaperClawContext(
         thread_id=prepared.thread_id,
         run_id=prepared.run_id,
@@ -516,6 +544,7 @@ def _agent_context(prepared: PreparedAgentRun, request: AgentMessageRequest) -> 
         extra_body=settings.chat_extra_body,
         rate_limiter=_chat_rate_limiter(settings),
         chat_provider_name=provider_name,
+        extra_instructions=extra_instructions,
     )
 
 
@@ -561,6 +590,39 @@ def _thread_title(message: str) -> str:
     return title or "New thread"
 
 
+def _request_owner_key(request: AgentMessageRequest) -> str | None:
+    metadata = request.metadata if isinstance(request.metadata, dict) else {}
+    value = metadata.get("owner_id") or metadata.get("owner_key")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:200] or None
+
+
+def _ensure_thread_owner(thread: Thread | None, request: AgentMessageRequest) -> None:
+    """Keep BFF-owned threads isolated without requiring a new DB migration.
+
+    Older PaperClaw installations do not have an owner column.  The metadata
+    field is already durable JSON, so it is used as the compatibility-safe
+    ownership boundary for calls carrying an owner_id.  Legacy internal calls
+    without owner metadata remain unchanged.
+    """
+    if thread is None:
+        return
+    owner_key = _request_owner_key(request)
+    if not owner_key:
+        return
+    metadata = dict(thread.metadata_json or {})
+    stored_owner = metadata.get("owner_key")
+    if stored_owner is not None and str(stored_owner) != owner_key:
+        raise ValueError("Thread does not belong to the requested owner")
+    if stored_owner is None:
+        # Do not allow a BFF user to claim a legacy global thread.  New threads
+        # are always created with owner_key above; old threads remain available
+        # only to the legacy no-owner API path.
+        raise ValueError("Thread ownership is not established")
+
+
 def _new_deepagent_thread_id() -> str:
     return f"paper-claw-thread-{uuid4()}"
 
@@ -571,14 +633,43 @@ def _run_input(request: AgentMessageRequest) -> dict[str, Any]:
     return data
 
 
+def _assistant_text_from_agent_state(agent: Any, config: dict[str, Any]) -> str:
+    getter = getattr(agent, "get_state", None)
+    if not callable(getter):
+        return ""
+    try:
+        snapshot = getter(config)
+    except Exception:
+        return ""
+    values = getattr(snapshot, "values", snapshot)
+    return _assistant_text(values)
+
+
 def _assistant_text(output: Any) -> str:
     if isinstance(output, dict) and "messages" in output:
         for message in reversed(output["messages"]):
+            if not _is_ai_message(message):
+                continue
             content = _message_content(message)
             if content:
                 return content
+        return ""
+    if isinstance(output, dict):
+        nested = output.get("model")
+        if nested is not None:
+            found = _assistant_text(nested)
+            if found:
+                return found
     content = _message_content(output)
-    return content or ""
+    return content if content and _is_ai_message(output) else ""
+
+
+def _is_ai_message(message: Any) -> bool:
+    if isinstance(message, dict):
+        role = str(message.get("type") or message.get("role") or "").lower()
+    else:
+        role = str(getattr(message, "type", "") or getattr(message, "role", "") or "").lower()
+    return role in {"ai", "assistant", "aichunk", "aimessagechunk", "aimessage"}
 
 
 def _message_content(message: Any) -> str | None:
@@ -586,16 +677,35 @@ def _message_content(message: Any) -> str | None:
         content = message.get("content")
     else:
         content = getattr(message, "content", None)
+    text = _content_to_text(content)
+    if text:
+        return text
+    additional = message.get("additional_kwargs") if isinstance(message, dict) else getattr(message, "additional_kwargs", None)
+    if isinstance(additional, dict):
+        return _content_to_text(additional.get("content"))
+    return None
+
+
+def _content_to_text(content: Any) -> str | None:
     if isinstance(content, str):
-        return content
+        stripped = content.strip()
+        return stripped or None
     if isinstance(content, list):
-        parts = []
+        parts: list[str] = []
         for item in content:
-            if isinstance(item, str):
+            if isinstance(item, str) and item.strip():
                 parts.append(item)
-            elif isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
-        return "\n".join(parts)
+            elif isinstance(item, dict):
+                item_type = str(item.get("type") or "").lower()
+                if item_type in {"thinking", "reasoning"}:
+                    continue
+                for key in ("text", "content", "output_text"):
+                    value = item.get(key)
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value)
+                        break
+        joined = "\n".join(parts).strip()
+        return joined or None
     return None
 
 
@@ -631,16 +741,29 @@ def _normalize_stream_data(mode: str, data: Any) -> Any:
 def _stream_message_text(normalized: dict[str, Any]) -> str | None:
     if normalized.get("mode") != "messages":
         return None
+    # Subagent / subgraph tokens arrive with a namespace. Keep only the main
+    # graph so the user-facing reply is not drowned out by specialist traces.
+    # Do not filter on lc_agent_name: deepagents sets it to the main agent name
+    # ("paper-claw") as well, which previously dropped every visible token.
+    namespace = normalized.get("namespace") or []
+    if namespace:
+        return None
     data = normalized.get("data")
-    if not isinstance(data, dict) or not isinstance(data.get("content"), str):
+    if not isinstance(data, dict):
+        return None
+    content = _content_to_text(data.get("content"))
+    if not content:
+        content = _message_content(data.get("message"))
+    if not content:
         return None
     metadata = data.get("metadata")
-    if not isinstance(metadata, dict) or metadata.get("langgraph_node") != "model" or metadata.get("lc_agent_name") is not None:
+    node = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+    if node not in {None, "model"}:
         return None
     message = data.get("message")
-    if isinstance(message, dict) and str(message.get("type", "")).lower() not in {"ai", "aichunk", "aimessagechunk"}:
+    if isinstance(message, dict) and str(message.get("type", "")).lower() not in {"", "ai", "aichunk", "aimessagechunk", "aimessage"}:
         return None
-    return data["content"]
+    return content
 
 
 def _stream_client_payload(normalized: dict[str, Any]) -> dict[str, Any]:

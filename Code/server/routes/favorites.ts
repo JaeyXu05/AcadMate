@@ -1,6 +1,7 @@
 import { Router, Response } from 'express';
 import { getDb } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { appendGrowthEvent } from '../data/growthStore';
 
 export const favoritesRouter = Router();
 
@@ -39,6 +40,11 @@ favoritesRouter.post('/', (req: AuthRequest, res: Response) => {
     const fav = db
       .prepare('SELECT id, advisor_id, created_at FROM favorites WHERE id = ?')
       .get(result.lastInsertRowid);
+    appendGrowthEvent(req.userId!, {
+      verb: 'favorited',
+      objectType: 'advisor',
+      objectId: String(advisor_id),
+    });
 
     res.status(201).json(fav);
   } catch {
@@ -59,6 +65,11 @@ favoritesRouter.delete('/:advisor_id', (req: AuthRequest, res: Response) => {
     res.status(404).json({ message: '未找到该收藏' });
     return;
   }
+  appendGrowthEvent(req.userId!, {
+    verb: 'unfavorited',
+    objectType: 'advisor',
+    objectId: String(advisor_id),
+  });
 
   res.json({ message: '已取消收藏' });
 });

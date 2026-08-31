@@ -1,3 +1,73 @@
+/** 科研成长状态（匹配 / 方向 / 已读论文） */
+export interface GrowthMentor {
+  id: string;
+  name: string;
+  tags?: string[];
+  evidence_refs?: string[];
+  source_run_id?: string;
+  review_status?: string;
+}
+
+export interface GrowthReadPaper {
+  paper_id?: number;
+  candidate_id: string;
+  mentor_name?: string;
+  titles: string[];
+  read_at: string;
+  evidence_refs?: string[];
+  source_run_id?: string;
+  review_status?: string;
+}
+
+export interface GrowthExperience {
+  id: string;
+  type: string;
+  summary: string;
+  evidence_refs: string[];
+  verified_at?: string;
+  source_run_id?: string;
+  review_status?: string;
+}
+
+export interface GrowthArtifact {
+  id: string;
+  type: string;
+  title: string;
+  evidence_refs: string[];
+  source_run_id?: string;
+  review_status?: string;
+}
+
+export interface GrowthResearchTask {
+  id: string;
+  title: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'blocked';
+  acceptance_criteria: string[];
+  evidence_refs?: string[];
+  source_run_id?: string;
+  review_status?: string;
+}
+
+export interface GrowthDirectionHypothesis {
+  id: string;
+  direction: string;
+  status: 'hypothesis' | 'supported' | 'rejected';
+  evidence_refs: string[];
+  updated_at?: string;
+  source_run_id?: string;
+  review_status?: string;
+}
+
+export interface GrowthState {
+  matched_mentors: GrowthMentor[];
+  directions: string[];
+  read_papers: GrowthReadPaper[];
+  verified_experiences: GrowthExperience[];
+  artifacts: GrowthArtifact[];
+  research_tasks: GrowthResearchTask[];
+  direction_hypotheses: GrowthDirectionHypothesis[];
+}
+
 /** 用户信息 */
 export interface User {
   id: number | string;

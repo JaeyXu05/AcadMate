@@ -1,17 +1,20 @@
 .container {
+  position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 24px 32px 32px;
+  padding: 8px 8px 32px;
   max-width: 1080px;
   margin: 0 auto;
   width: 100%;
+  height: 100%;
 }
 
 .title {
-  color: #fff;
+  color: #1c1917;
   font-size: 22px;
+  font-weight: 500;
   margin: 0;
   display: flex;
   align-items: center;
@@ -20,28 +23,23 @@
 }
 
 .subtitle {
-  color: rgba(255, 255, 255, 0.45);
+  color: #78716c;
   font-size: 14px;
   margin: 6px 0 16px;
-  flex-shrink: 0;
 }
 
 .basedOn {
-  color: #aab4ff;
+  color: #57534e;
   font-size: 13px;
-  background: rgba(102, 126, 234, 0.1);
-  border: 1px solid rgba(102, 126, 234, 0.2);
-  border-radius: 8px;
-  padding: 8px 14px;
+  border-bottom: 1px solid rgba(28, 25, 23, 0.06);
+  padding: 8px 0 14px;
   margin-bottom: 16px;
-  flex-shrink: 0;
-  display: inline-block;
+  line-height: 1.55;
 }
 
 .resultsArea {
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
 }
 
 .resultsList {
@@ -51,17 +49,10 @@
   padding: 4px 0 24px;
 }
 
-.emptyState {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100%;
-  padding-bottom: 40px;
-}
-
+.emptyState,
 .loadingWrap {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 320px;
+  min-height: 280px;
 }

@@ -72,6 +72,15 @@ def test_domain_expert_loads_multiple_configs_and_preserves_disagreement():
     )
 
 
+def test_domain_expert_does_not_default_unrelated_query_to_ai():
+    judgements = DynamicDomainExpertAgent().run(
+        _intent(research_topics=["氢能"], methods=[], application_domains=[], raw_message="氢能")
+    )
+    assert judgements
+    assert all(item.domain != "artificial_intelligence" for item in judgements)
+    assert judgements[0].search_concepts == ["氢能"]
+
+
 def test_research_uses_local_result_and_binds_evidence(research_result_factory):
     result = research_result_factory()
     tool = SequenceResearchTool(local_results=[result])
@@ -148,14 +157,64 @@ def test_matching_scores_multiple_dimensions_and_ranks(research_result_factory):
 
     assert matches[0].candidate_id == "strong"
     assert matches[0].ranking_position == 1
-    assert matches[0].dimension_scores.research_topic_match == 100
-    assert (
-        matches[1].dimension_scores.evidence_completeness
-        < matches[0].dimension_scores.evidence_completeness
-    )
+    assert matches[0].dimension_scores.research_topic_match >= 90
+    assert len(matches) == 1
     assert matches[0].risks == [
         "Recruitment status is not verified and must not be assumed."
     ]
+    assert matches[0].total_score == matches[0].dimension_scores.research_topic_match
+
+
+def test_matching_uses_precise_topic_overlap_not_retrieve_score(
+    research_result_factory,
+):
+    # 候选方向与查询方向无交集，dense retrieve_score 的 81.25 不再被当成
+    # 研究方向匹配分；精确主题重排后应为 0（而不是 cos 换算的 81.25）。
+    result = research_result_factory(
+        candidate_id="semantic",
+        topics=["微分方程动力学", "邮政编码：230026"],
+    )
+    result.candidates[0].source_metadata["retrieve_score"] = 81.25
+    result.candidates[0].source_metadata["retrieve_mode"] = "dense_multilingual"
+
+    matches = MatchingAgent().run(
+        _intent(research_topics=["推荐系统"], methods=[], application_domains=[]),
+        result.candidates,
+        EvidenceLedger(result.evidence),
+    )
+
+    assert matches == []
+
+
+def test_matching_precise_topic_overlap_scores_exact_direction(research_result_factory):
+    # 候选方向精确含查询主题时，精确主题重排给出校准后的高匹配分。
+    result = research_result_factory(
+        candidate_id="exact",
+        topics=["强化学习", "多智能体"],
+    )
+
+    matches = MatchingAgent().run(
+        _intent(research_topics=["强化学习"], methods=[], application_domains=[]),
+        result.candidates,
+        EvidenceLedger(result.evidence),
+    )
+
+    assert matches[0].dimension_scores.research_topic_match > 0
+
+
+def test_matching_empty_optional_dimensions_do_not_default_to_fifty(
+    research_result_factory,
+):
+    result = research_result_factory()
+    matches = MatchingAgent().run(
+        _intent(methods=[], application_domains=[]),
+        result.candidates,
+        EvidenceLedger(result.evidence),
+    )
+
+    assert matches[0].dimension_scores.method_match == 0
+    assert matches[0].dimension_scores.application_match == 0
+    assert matches[0].total_score == matches[0].dimension_scores.research_topic_match
 
 
 def test_matching_rejects_unknown_evidence_reference(research_result_factory):

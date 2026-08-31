@@ -57,6 +57,12 @@ class WorkflowName(StrEnum):
     citation_survey = "citation_survey"
     subscription_ingestion = "subscription_ingestion"
     mentor_search = "mentor_search"
+    pdf_analyze = "pdf_analyze"
+    email_compose = "email_compose"
+    research_task = "research_task"
+    direction_explore = "direction_explore"
+    progress_report = "progress_report"
+    plan_coach = "plan_coach"
 
 
 class RunStatus(StrEnum):

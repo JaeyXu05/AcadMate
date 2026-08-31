@@ -2,70 +2,195 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { CloudGraphProps, CloudNode } from '../types/cloud';
+import { createGalaxyDust, createNebulaDust } from '../utils/galaxyBackground';
 
-/**
- * 3D 云图组件（Three.js 银河系渲染）。
- *
- * - nodes / edges 由后端 `GET /api/cloud/graph` 提供；点位为预计算的银河盘坐标。
- * - 715 位导师用一块 `InstancedMesh` + 自定义 ShaderMaterial 渲染：每个实例是一个
- *   面向相机的 billboard，亮/色/大小/径向亮度都走顶点&片元属性，心跳脉冲在 GPU 完成，
- *   从"715 次 draw call + 逐帧改材质"降到"1 次 draw call"，显著降低卡顿。
- * - 消费 build_cloud.py 生成的 `lum`（学术亮度）与 `core_lum`（径向中心亮度），
- *   复刻银河"越近亮核越亮"的纵深。
- * - 银河背景：沿旋臂星尘 + 柔和星云 + 中央亮核（HANDOVER 规格），与 `SPIRAL` 同参。
- * - 交互：拖拽旋转 / 滚轮缩放 / 自动缓转；点击 → onSelectNode(id)；悬停 → onHoverNode(id)。
- */
+function seededRandom(seed: number) {
+  let value = seed >>> 0;
+  return () => {
+    value += 0x6d2b79f5;
+    let result = value;
+    result = Math.imul(result ^ (result >>> 15), result | 1);
+    result ^= result + Math.imul(result ^ (result >>> 7), result | 61);
+    return ((result ^ (result >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
-// 银河盘常量（与 cloud3d/build_cloud.py 的布局一致，供背景装饰同参使用）
-const SPIRAL = { r_in: 170, r_out: 540, turns: 1.4, arms: 6 };
-
-/** 生成柔和发光贴图（径向渐变），供星云/亮核等装饰与 billboard 采样 */
 function makeGlowTexture(inner: string, mid: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d')!;
-  const grd = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grd.addColorStop(0, inner);
-  grd.addColorStop(0.25, mid);
-  grd.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = grd;
-  ctx.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(canvas);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context unavailable');
+  const gradient = context.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gradient.addColorStop(0, inner);
+  gradient.addColorStop(0.28, mid);
+  gradient.addColorStop(1, 'rgba(0,0,0,0)');
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, 128, 128);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
-/** 沿对数螺旋线生成一批装饰粒子坐标（星尘）。t ∈ [t0,t1] 径向均布，Y 薄盘。 */
-function spiralDust(cfg: typeof SPIRAL, count: number, t0: number, t1: number) {
-  const positions = new Float32Array(count * 3);
-  const turn = cfg.turns * Math.PI * 2;
-  for (let i = 0; i < count; i++) {
-    // 随机挑臂
-    const arm = Math.floor(Math.random() * cfg.arms);
-    const phase = (arm * Math.PI * 2) / cfg.arms;
-    if (Math.random() < 0.5) {
-      // 径向随机（螺旋盘主体）
-      const t = t0 + Math.random() * (t1 - t0);
-      const rBase = cfg.r_in * Math.pow(cfg.r_out / cfg.r_in, t);
-      const th = phase + t * turn + (Math.random() - 0.5) * 0.18;
-      const u = (Math.random() - 0.5) * 16; // 臂两侧展开
-      const drdt = rBase * Math.log(cfg.r_out / cfg.r_in);
-      const tx = drdt * Math.cos(th) - rBase * turn * Math.sin(th);
-      const tz = drdt * Math.sin(th) + rBase * turn * Math.cos(th);
-      const tl = Math.hypot(tx, tz) || 1;
-      const nx = -tz / tl;
-      const nz = tx / tl;
-      positions[i * 3] = rBase * Math.cos(th) + u * nx;
-      positions[i * 3 + 2] = rBase * Math.sin(th) + u * nz;
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 6;
-    } else {
-      // 背景散点（径向散布更广）
-      const r = cfg.r_in + Math.random() * (cfg.r_out - cfg.r_in) * 1.6;
-      const th = Math.random() * Math.PI * 2;
-      positions[i * 3] = r * Math.cos(th);
-      positions[i * 3 + 1] = (Math.random() - 0.5) * 40;
-      positions[i * 3 + 2] = r * Math.sin(th);
-    }
+function makeDomainLabelTexture(label: string, color: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context unavailable');
+  context.fillStyle = 'rgba(7, 12, 27, 0.82)';
+  context.beginPath();
+  context.roundRect(8, 16, 496, 96, 26);
+  context.fill();
+  context.strokeStyle = color;
+  context.lineWidth = 4;
+  context.stroke();
+  context.font = '600 42px system-ui, sans-serif';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillStyle = '#f6f8ff';
+  context.fillText(label, 256, 64, 450);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function makeSelectedLabelTexture(node: CloudNode): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 256;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context unavailable');
+  const accent = node.color ?? '#8ba8ff';
+  const gradient = context.createLinearGradient(20, 24, 1004, 232);
+  gradient.addColorStop(0, 'rgba(8, 15, 34, 0.96)');
+  gradient.addColorStop(1, 'rgba(14, 25, 54, 0.9)');
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.roundRect(18, 22, 988, 212, 48);
+  context.fill();
+  context.strokeStyle = accent;
+  context.lineWidth = 7;
+  context.stroke();
+  context.fillStyle = accent;
+  context.beginPath();
+  context.arc(84, 94, 14, 0, Math.PI * 2);
+  context.fill();
+  context.textAlign = 'left';
+  context.textBaseline = 'middle';
+  context.fillStyle = '#f8faff';
+  context.font = '700 66px system-ui, sans-serif';
+  context.fillText(node.name || '未命名导师', 122, 92, 820);
+  context.fillStyle = 'rgba(218, 228, 250, 0.76)';
+  context.font = '400 34px system-ui, sans-serif';
+  context.fillText(`${node.department || '院系待补充'} · ${node.domain_name || '待分类'}`, 68, 170, 875);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function compactNodeLabel(value: string): string[] {
+  const compact = value.replace(/^中国科学技术大学/, '').trim() || value;
+  const characters = Array.from(compact);
+  if (characters.length <= 11) return [compact];
+  const split = Math.ceil(characters.length / 2);
+  return [characters.slice(0, split).join(''), characters.slice(split).join('')];
+}
+
+function makeNodeLabelTexture(label: string): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 224;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context unavailable');
+  const lines = compactNodeLabel(label).slice(0, 2);
+  const gradient = context.createLinearGradient(18, 16, 622, 208);
+  gradient.addColorStop(0, 'rgba(6, 14, 32, 0.92)');
+  gradient.addColorStop(1, 'rgba(12, 28, 58, 0.78)');
+  context.fillStyle = gradient;
+  context.beginPath();
+  context.roundRect(14, 18, 612, 188, 42);
+  context.fill();
+  context.strokeStyle = 'rgba(126, 192, 255, 0.72)';
+  context.lineWidth = 5;
+  context.stroke();
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillStyle = '#f3f8ff';
+  context.font = lines.length === 1 ? '600 43px system-ui, sans-serif' : '600 37px system-ui, sans-serif';
+  lines.forEach((line, index) => {
+    const y = lines.length === 1 ? 112 : 80 + index * 66;
+    context.fillText(line, 320, y, 550);
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
+
+function makeMentorLabelTexture(node: CloudNode): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 480;
+  canvas.height = 128;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Canvas 2D context unavailable');
+  const accent = node.color ?? '#8ba8ff';
+  context.fillStyle = 'rgba(6, 12, 27, 0.82)';
+  context.beginPath();
+  context.roundRect(8, 14, 464, 100, 28);
+  context.fill();
+  context.strokeStyle = accent;
+  context.lineWidth = 3;
+  context.stroke();
+  context.fillStyle = accent;
+  context.beginPath();
+  context.arc(46, 64, 8, 0, Math.PI * 2);
+  context.fill();
+  context.textAlign = 'left';
+  context.textBaseline = 'middle';
+  context.fillStyle = '#f5f8ff';
+  context.font = '600 37px system-ui, sans-serif';
+  context.fillText(node.name || '未命名导师', 70, 64, 370);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.minFilter = THREE.LinearFilter;
+  return texture;
+}
+
+/**
+ * 姓名常驻标签做空间抽样，而不是按论文数排序：论文字段可能缺失，并且
+ * 所有导师仍可通过悬停、搜索和点击获得完整姓名。这样既不制造学术排名，
+ * 也避免大院系里几十块姓名牌彼此覆盖。
+ */
+function pickMentorLabelNodes(nodes: CloudNode[]): CloudNode[] {
+  const limit = Math.min(18, Math.max(8, Math.ceil(Math.sqrt(nodes.length) * 2.4)));
+  const byStableVisualWeight = [...nodes].sort((left, right) => (
+    (right.size ?? 1) - (left.size ?? 1)
+    || (right.lum ?? 0.7) - (left.lum ?? 0.7)
+    || left.id.localeCompare(right.id)
+  ));
+  const picked: CloudNode[] = [];
+  for (const candidate of byStableVisualWeight) {
+    const separated = picked.every((node) => Math.hypot(
+      (node.x ?? 0) - (candidate.x ?? 0),
+      (node.y ?? 0) - (candidate.y ?? 0),
+      (node.z ?? 0) - (candidate.z ?? 0),
+    ) >= 56);
+    if (separated) picked.push(candidate);
+    if (picked.length >= limit) break;
   }
-  return positions;
+  return picked;
+}
+
+function nodeColor(node: CloudNode): THREE.Color {
+  const color = new THREE.Color();
+  try {
+    color.set(node.color ?? '#7d9cff');
+  } catch {
+    color.set('#7d9cff');
+  }
+  return color;
 }
 
 export default function CloudGraph({
@@ -75,516 +200,979 @@ export default function CloudGraph({
   onSelectNode,
   onHoverNode,
   loading,
+  focusRequest,
+  resetSignal,
+  reducedMotion,
+  labelMode = 'domains',
+  initialTarget,
   className,
   style,
 }: CloudGraphProps) {
   const mountRef = useRef<HTMLDivElement>(null);
+  const pointerGlowRef = useRef<HTMLDivElement>(null);
   const hoverRef = useRef<HTMLDivElement>(null);
+  const hoverNameRef = useRef<HTMLDivElement>(null);
+  const hoverDeptRef = useRef<HTMLDivElement>(null);
+  const hoverDomainRef = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef(selectedId);
+  const onSelectRef = useRef(onSelectNode);
+  const onHoverRef = useRef(onHoverNode);
+  const applySelectionRef = useRef<() => void>(() => undefined);
+  const focusNodeRef = useRef<(id: string) => void>(() => undefined);
+  const resetViewRef = useRef<() => void>(() => undefined);
+  const targetX = initialTarget?.[0] ?? 0;
+  const targetY = initialTarget?.[1] ?? 0;
+  const targetZ = initialTarget?.[2] ?? 0;
 
-  // 组件内部跨渲染闭包共享的 scene 状态
-  const applySelectionRef = useRef<() => void>(() => {});
-  const hoverInfoRef = useRef<{ x: number; y: number; node: CloudNode } | null>(null);
-  const selectedNodesRef = useRef<Set<string>>(new Set());
+  selectedRef.current = selectedId;
+  onSelectRef.current = onSelectNode;
+  onHoverRef.current = onHoverNode;
 
-  // 状态同步（数据 / 选中 / 悬停变化时触发）
-  const nodesRef = useRef(nodes);
-  nodesRef.current = nodes;
-  const edgesRef = useRef(edges);
-  edgesRef.current = edges;
-  const selRef = useRef<string | undefined>(selectedId ?? undefined);
-  const hoveredRef = useRef<string | null>(null);
-  const onHoverNodeRef = useRef(onHoverNode);
-  onHoverNodeRef.current = onHoverNode;
-
-  // ============ 初始化 Three.js 场景（依赖 nodes，数据到达后（重）建） ============
   useEffect(() => {
     const mount = mountRef.current;
-    // 数据未到（nodes 为空）时不建场景，避免 InstancedMesh 以 0 实例一次性渲染；
-    // 数据到达后本 effect 因 [nodes] 变化重跑，从零重建全部实例。
-    if (!mount || !nodes || nodes.length === 0) return;
+    if (!mount || nodes.length === 0) return;
 
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const shouldReduceMotion = reducedMotion ?? mediaQuery.matches;
+    const sceneTarget = new THREE.Vector3(targetX, targetY, targetZ);
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x03030a);
+    scene.background = new THREE.Color('#030611');
+    scene.fog = new THREE.FogExp2('#030611', 0.00042);
 
-    const camera = new THREE.PerspectiveCamera(55, mount.clientWidth / mount.clientHeight, 0.1, 8000);
-    camera.position.set(0, 950, 1400);
+    const maxRadius = Math.max(420, ...nodes.map((node) => Math.hypot(
+      (node.x ?? 0) - targetX,
+      (node.y ?? 0) - targetY,
+      (node.z ?? 0) - targetZ,
+    )));
+    const cameraRadius = Math.max(900, maxRadius * 1.72);
+    const camera = new THREE.PerspectiveCamera(48, mount.clientWidth / Math.max(1, mount.clientHeight), 0.1, 7000);
+    // The department overview is intentionally close to face-on: every department
+    // lives on the same plane and should read as an equal peer, without perspective
+    // making the far half of the orbit look smaller or less important.
+    const makeDefaultCameraPosition = (aspect: number) => {
+      const safeAspect = Math.max(0.48, aspect);
+      if (labelMode === 'nodes') {
+        return sceneTarget.clone().add(new THREE.Vector3(
+          0,
+          cameraRadius * 1.34 * Math.max(1, 1 / safeAspect),
+          cameraRadius * 0.04,
+        ));
+      }
+      const narrowScale = Math.max(1, 1.1 / safeAspect);
+      return sceneTarget.clone().add(new THREE.Vector3(
+        0,
+        cameraRadius * 0.52 * narrowScale,
+        cameraRadius * 0.98 * narrowScale,
+      ));
+    };
+    let defaultCameraPosition = makeDefaultCameraPosition(camera.aspect);
+    camera.position.copy(defaultCameraPosition);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(mount.clientWidth, mount.clientHeight);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(mount.clientWidth, mount.clientHeight, false);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 0.92;
+    renderer.domElement.setAttribute('aria-hidden', 'true');
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.06;
-    controls.autoRotate = true;
-    controls.autoRotateSpeed = 0.5;
-    controls.minDistance = 80;
-    controls.maxDistance = 5000;
+    controls.target.copy(sceneTarget);
+    controls.enableDamping = !shouldReduceMotion;
+    controls.dampingFactor = 0.065;
+    controls.autoRotate = !shouldReduceMotion;
+    controls.autoRotateSpeed = 0.28;
+    controls.minDistance = 110;
+    controls.maxDistance = 4200;
+    controls.enablePan = true;
+    controls.listenToKeyEvents(mount);
+    controls.saveState();
 
-    // ---------- 银河背景（纯装饰，非导师，不可交互） ----------
-    const bgDust = new THREE.Group();
-    scene.add(bgDust);
+    const disposableTextures = new Set<THREE.Texture>();
 
-    // 沿旋臂星尘：让旋臂有实体颗粒感
-    const armGeo = new THREE.BufferGeometry();
-    const armPos = spiralDust(SPIRAL, 2600, 0.12, 0.95);
-    armGeo.setAttribute('position', new THREE.BufferAttribute(armPos, 3));
-    const armDust = new THREE.Points(
-      armGeo,
-      new THREE.PointsMaterial({
-        size: 1.6,
-        color: 0x9db8ff,
+    // 多层背景由旋臂、环带和星晕共同组成。误差函数有界且种子固定，
+    // 因此不会呈现完美数学曲线，也不会在刷新时重新跳位。
+    const armGeometry = new THREE.BufferGeometry();
+    const fineGalaxy = createGalaxyDust(14500, 107, 'fine');
+    armGeometry.setAttribute('position', new THREE.BufferAttribute(fineGalaxy.positions, 3));
+    armGeometry.setAttribute('color', new THREE.BufferAttribute(fineGalaxy.colors, 3));
+    const armMaterial = new THREE.PointsMaterial({
+      size: 1.4,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.68,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const armDust = new THREE.Points(armGeometry, armMaterial);
+    armDust.position.copy(sceneTarget);
+    scene.add(armDust);
+
+    // 第二层以更宽的误差和大颗粒低透明雾连接彩色旋臂与不完整环带。
+    const armMistGeometry = new THREE.BufferGeometry();
+    const mistGalaxy = createGalaxyDust(6200, 401, 'mist');
+    armMistGeometry.setAttribute('position', new THREE.BufferAttribute(mistGalaxy.positions, 3));
+    armMistGeometry.setAttribute('color', new THREE.BufferAttribute(mistGalaxy.colors, 3));
+    const armMistTexture = makeGlowTexture('rgba(255,255,255,0.78)', 'rgba(141,169,255,0.22)');
+    disposableTextures.add(armMistTexture);
+    const armMistMaterial = new THREE.PointsMaterial({
+      size: 7.4,
+      vertexColors: true,
+      map: armMistTexture,
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const armMist = new THREE.Points(armMistGeometry, armMistMaterial);
+    armMist.position.copy(sceneTarget);
+    scene.add(armMist);
+
+    // 宽幅碎裂星云呼应参考视频的横向粒子云；它来自独立分布而非旋臂复制。
+    const bandGalaxy = createNebulaDust(3600, 781);
+    const bandGeometry = new THREE.BufferGeometry();
+    bandGeometry.setAttribute('position', new THREE.BufferAttribute(bandGalaxy.positions, 3));
+    bandGeometry.setAttribute('color', new THREE.BufferAttribute(bandGalaxy.colors, 3));
+    const bandMaterial = new THREE.PointsMaterial({
+      size: 10.5,
+      vertexColors: true,
+      map: armMistTexture,
+      transparent: true,
+      opacity: 0.12,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const bandDust = new THREE.Points(bandGeometry, bandMaterial);
+    bandDust.position.copy(sceneTarget);
+    scene.add(bandDust);
+
+    // 两层球幕星野围绕相机与银河：细星提供真实密度，大星只作少量冷暖节奏。
+    // 使用固定种子和静态缓冲，不在逐帧创建对象，也不会与导师数据混淆。
+    const deepRandom = seededRandom(1138);
+    const farStarCount = 5200;
+    const farStarPositions = new Float32Array(farStarCount * 3);
+    const farStarColors = new Float32Array(farStarCount * 3);
+    const starPalette = ['#c9dcff', '#8fb6ff', '#e5efff', '#b7a8ff', '#f4d9bd'].map((value) => new THREE.Color(value));
+    for (let index = 0; index < farStarCount; index += 1) {
+      const radius = 1350 + deepRandom() * 2250;
+      const theta = deepRandom() * Math.PI * 2;
+      const vertical = deepRandom() * 2 - 1;
+      const planar = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+      farStarPositions[index * 3] = radius * planar * Math.cos(theta);
+      farStarPositions[index * 3 + 1] = radius * vertical * 0.72;
+      farStarPositions[index * 3 + 2] = radius * planar * Math.sin(theta);
+      const color = starPalette[Math.floor(deepRandom() * starPalette.length)];
+      const strength = 0.48 + deepRandom() * 0.52;
+      farStarColors[index * 3] = color.r * strength;
+      farStarColors[index * 3 + 1] = color.g * strength;
+      farStarColors[index * 3 + 2] = color.b * strength;
+    }
+    const farStarGeometry = new THREE.BufferGeometry();
+    farStarGeometry.setAttribute('position', new THREE.BufferAttribute(farStarPositions, 3));
+    farStarGeometry.setAttribute('color', new THREE.BufferAttribute(farStarColors, 3));
+    const farStarMaterial = new THREE.PointsMaterial({
+      size: 1,
+      sizeAttenuation: false,
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.64,
+      depthWrite: false,
+      depthTest: false,
+      fog: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const farStars = new THREE.Points(farStarGeometry, farStarMaterial);
+    farStars.position.copy(sceneTarget);
+    farStars.renderOrder = -10;
+    scene.add(farStars);
+
+    const beaconCount = 460;
+    const beaconPositions = new Float32Array(beaconCount * 3);
+    for (let index = 0; index < beaconCount; index += 1) {
+      const radius = 1000 + deepRandom() * 2500;
+      const theta = deepRandom() * Math.PI * 2;
+      const vertical = deepRandom() * 2 - 1;
+      const planar = Math.sqrt(Math.max(0, 1 - vertical * vertical));
+      beaconPositions[index * 3] = radius * planar * Math.cos(theta);
+      beaconPositions[index * 3 + 1] = radius * vertical * 0.7;
+      beaconPositions[index * 3 + 2] = radius * planar * Math.sin(theta);
+    }
+    const beaconTexture = makeGlowTexture('rgba(255,255,255,0.92)', 'rgba(119,159,255,0.25)');
+    disposableTextures.add(beaconTexture);
+    const beaconGeometry = new THREE.BufferGeometry();
+    beaconGeometry.setAttribute('position', new THREE.BufferAttribute(beaconPositions, 3));
+    const beaconMaterial = new THREE.PointsMaterial({
+      size: 3.8,
+      sizeAttenuation: false,
+      color: '#9ebeff',
+      map: beaconTexture,
+      transparent: true,
+      opacity: 0.38,
+      alphaTest: 0.01,
+      depthWrite: false,
+      depthTest: false,
+      fog: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const beaconStars = new THREE.Points(beaconGeometry, beaconMaterial);
+    beaconStars.position.copy(sceneTarget);
+    beaconStars.renderOrder = -9;
+    scene.add(beaconStars);
+
+    // 大尺度低透明星云让黑色背景有冷暖层次；保持在数据和旋臂之后，避免抢夺语义色。
+    const nebulaGroup = new THREE.Group();
+    const addNebula = (
+      position: [number, number, number],
+      scale: [number, number],
+      inner: string,
+      mid: string,
+      color: string,
+      opacity: number,
+    ) => {
+      const texture = makeGlowTexture(inner, mid);
+      disposableTextures.add(texture);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        color,
         transparent: true,
-        opacity: 0.5,
+        opacity,
         depthWrite: false,
+        depthTest: false,
         blending: THREE.AdditiveBlending,
-      }),
-    );
-    bgDust.add(armDust);
+      });
+      const sprite = new THREE.Sprite(material);
+      sprite.position.set(...position);
+      sprite.scale.set(scale[0], scale[1], 1);
+      sprite.renderOrder = -8;
+      nebulaGroup.add(sprite);
+    };
+    addNebula([-520, -70, 120], [760, 390], 'rgba(98,184,255,0.52)', 'rgba(59,88,210,0.15)', '#6a8fff', 0.15);
+    addNebula([470, -40, -150], [720, 420], 'rgba(176,118,255,0.48)', 'rgba(95,61,190,0.13)', '#9f79ff', 0.13);
+    addNebula([40, -110, 520], [620, 300], 'rgba(79,231,216,0.42)', 'rgba(35,122,174,0.12)', '#5ed8d1', 0.1);
+    nebulaGroup.position.copy(sceneTarget);
+    scene.add(nebulaGroup);
 
-    // 远处深空星尘（缓慢自转的背景粒子）
-    const deepGeo = new THREE.BufferGeometry();
-    const deepCount = 1200;
-    const deepPos = new Float32Array(deepCount * 3);
-    for (let i = 0; i < deepCount; i++) {
-      const r = 700 + Math.random() * 2600;
-      const th = Math.random() * Math.PI * 2;
-      const ph = Math.acos(2 * Math.random() - 1);
-      deepPos[i * 3] = r * Math.sin(ph) * Math.cos(th);
-      deepPos[i * 3 + 1] = r * Math.sin(ph) * Math.sin(th) * 0.6;
-      deepPos[i * 3 + 2] = r * Math.cos(ph);
-    }
-    deepGeo.setAttribute('position', new THREE.BufferAttribute(deepPos, 3));
-    const deepDust = new THREE.Points(
-      deepGeo,
-      new THREE.PointsMaterial({
-        size: 1.2,
-        color: 0x4466aa,
+    // 总览使用接近圆形的青蓝涡核，导师层在倾斜视角下使用椭圆盘面。
+    const overviewCore = labelMode === 'nodes';
+    const coreGroup = new THREE.Group();
+    const addCoreLayer = (
+      inner: string,
+      mid: string,
+      color: string,
+      opacity: number,
+      width: number,
+      height: number,
+    ) => {
+      const texture = makeGlowTexture(inner, mid);
+      disposableTextures.add(texture);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        color,
         transparent: true,
-        opacity: 0.45,
-        depthWrite: false,
-      }),
-    );
-    bgDust.add(deepDust);
-
-    // 沿臂柔和星云（加性发光）
-    const nebulaTex = makeGlowTexture('rgba(255,255,255,0.9)', 'rgba(120,160,255,0.35)');
-    const nebulaColors = ['#4455dd', '#2255aa', '#5533aa', '#224477'];
-    for (let arm = 0; arm < SPIRAL.arms; arm++) {
-      const phase = (arm * Math.PI * 2) / SPIRAL.arms;
-      const pieces = 2 + (arm % 2);
-      for (let p = 0; p < pieces; p++) {
-        const t = 0.45 + Math.random() * 0.45;
-        const r = SPIRAL.r_in * Math.pow(SPIRAL.r_out / SPIRAL.r_in, t);
-        const th = phase + t * SPIRAL.turns * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
-        const mat = new THREE.SpriteMaterial({
-          map: nebulaTex,
-          color: nebulaColors[arm % nebulaColors.length],
-          transparent: true,
-          opacity: 0.16 + Math.random() * 0.12,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        });
-        const sprite = new THREE.Sprite(mat);
-        sprite.position.set(r * Math.cos(th), (Math.random() - 0.5) * 8, r * Math.sin(th));
-        const s = 260 + Math.random() * 220;
-        sprite.scale.set(s, s * 0.5, 1); // 长轴沿臂，压扁
-        bgDust.add(sprite);
-      }
-    }
-
-    // 中央亮核：同心暖金→白发光层 + 暗色黑洞环
-    const coreTex = makeGlowTexture('rgba(255,240,210,1)', 'rgba(255,190,90,0.5)');
-    const coreScales = [150, 95, 55, 26];
-    const coreColors = ['#ffd98a', '#ffe9b8', '#fff4d8', '#ffffff'];
-    coreScales.forEach((s, i) => {
-      const mat = new THREE.SpriteMaterial({
-        map: coreTex,
-        color: coreColors[i],
-        transparent: true,
-        opacity: 0.5 - i * 0.07,
+        opacity,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
       });
-      const sp = new THREE.Sprite(mat);
-      sp.position.set(0, 0, 0);
-      sp.scale.setScalar(s);
-      bgDust.add(sp);
-    });
-    // 暗色黑洞环衬托亮核
-    const ringTex = makeGlowTexture('rgba(0,0,0,0)', 'rgba(0,0,0,0.85)');
-    const ringRing = new THREE.Sprite(
-      new THREE.SpriteMaterial({ map: ringTex, transparent: true, opacity: 0.5, depthWrite: false }),
+      const sprite = new THREE.Sprite(material);
+      sprite.scale.set(width, height, 1);
+      coreGroup.add(sprite);
+    };
+    addCoreLayer(
+      'rgba(146,236,255,0.66)', 'rgba(55,92,218,0.18)', '#72a9ff', 0.38,
+      overviewCore ? 310 : 440, overviewCore ? 310 : 188,
     );
-    ringRing.position.set(0, 0, 0);
-    ringRing.scale.setScalar(380);
-    bgDust.add(ringRing);
+    addCoreLayer(
+      'rgba(204,248,255,0.94)', 'rgba(69,156,255,0.3)', '#a2e6ff', 0.56,
+      overviewCore ? 146 : 230, overviewCore ? 146 : 96,
+    );
+    addCoreLayer(
+      'rgba(255,255,255,1)', 'rgba(137,224,255,0.5)', '#f5ffff', 0.74,
+      overviewCore ? 42 : 62, overviewCore ? 42 : 26,
+    );
+    coreGroup.position.copy(sceneTarget);
+    scene.add(coreGroup);
 
-    // ---------- 导师星点：单块 InstancedMesh（billboard + 着色器属性） ----------
-    const COUNT = nodesRef.current.length;
-    const instGeo = new THREE.BufferGeometry();
-    // 单位平面，顶点/片元着色器负责 billboard + 发光
-    const positions = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, 1, 1, 0, -1, 1, 0, -1, -1, 0]);
-    const uvs = new Float32Array([0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 0, 0]);
-    instGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    instGeo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+    // 光池跟随鼠标投射到银河盘，给背景和节点提供局部明暗响应。
+    const cursorGlowTexture = makeGlowTexture('rgba(183,211,255,0.48)', 'rgba(76,112,214,0.12)');
+    disposableTextures.add(cursorGlowTexture);
+    const cursorGlowMaterial = new THREE.SpriteMaterial({
+      map: cursorGlowTexture,
+      color: '#9fc0ff',
+      transparent: true,
+      opacity: 0.22,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const cursorGlow = new THREE.Sprite(cursorGlowMaterial);
+    cursorGlow.scale.set(310, 190, 1);
+    cursorGlow.visible = false;
+    scene.add(cursorGlow);
 
-    const instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(COUNT * 3), 3);
-    const instanceSize = new THREE.InstancedBufferAttribute(new Float32Array(COUNT), 1);
-    const instanceLum = new THREE.InstancedBufferAttribute(new Float32Array(COUNT), 1);
-    const instanceOffset = new THREE.InstancedBufferAttribute(new Float32Array(COUNT * 3), 3);
+    // Base relationship layer: same-field nearest neighbours, not co-authorship.
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const edgePositions: number[] = [];
+    const edgeColors: number[] = [];
+    for (const edge of edges) {
+      const source = nodeById.get(edge.source);
+      const target = nodeById.get(edge.target);
+      if (!source || !target) continue;
+      edgePositions.push(source.x ?? 0, source.y ?? 0, source.z ?? 0, target.x ?? 0, target.y ?? 0, target.z ?? 0);
+      const sourceColor = nodeColor(source);
+      const targetColor = nodeColor(target);
+      edgeColors.push(sourceColor.r, sourceColor.g, sourceColor.b, targetColor.r, targetColor.g, targetColor.b);
+    }
+    const edgeGeometry = new THREE.BufferGeometry();
+    edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+    edgeGeometry.setAttribute('color', new THREE.Float32BufferAttribute(edgeColors, 3));
+    const edgeMaterial = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+    scene.add(edgeLines);
 
-    instGeo.setAttribute('aColor', instanceColor);
-    instGeo.setAttribute('aSize', instanceSize);
-    instGeo.setAttribute('aLum', instanceLum);
-    instGeo.setAttribute('aCenter', instanceOffset);
+    const selectedEdgeGeometry = new THREE.BufferGeometry();
+    const selectedEdgeMaterial = new THREE.LineBasicMaterial({
+      color: '#edf4ff',
+      transparent: true,
+      opacity: 0.82,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+    const selectedEdgeLines = new THREE.LineSegments(selectedEdgeGeometry, selectedEdgeMaterial);
+    selectedEdgeLines.renderOrder = 4;
+    scene.add(selectedEdgeLines);
 
-    // quad（6 顶点）作为公告板精灵：顶点着色器用视图矩阵的 right/up 把单位四边形
-    // 偏移成面向相机的屏幕空间四边形；片元用 uv 计算径向发光（不能用 gl_PointCoord，
-    // 那只对 GL_POINTS 有效，这里是非点原语的 InstancedMesh）。
-    const vertexShader = /* glsl */ `
-      attribute vec3 aColor;
-      attribute float aSize;
-      attribute float aLum;
-      attribute vec3 aCenter;
-      attribute vec2 uv;
-      varying vec3 vColor;
-      varying float vLum;
-      varying float vPulse;
-      varying vec2 vUv;
-      uniform float uTime;
-      uniform float uPixelRatio;
-      uniform float uSize;
-      void main() {
-        vColor = aColor;
-        vLum = aLum;
-        vUv = uv;
-        // 呼吸脉冲（差异由 instance id 相位引入），片元亮度乘它，GPU 完成不逐帧改材质
-        vPulse = 0.82 + 0.18 * sin(uTime * 1.4 + float(gl_InstanceID) * 0.53);
-        // 中心点变换到相机空间
-        vec4 centerView = modelViewMatrix * vec4(aCenter, 1.0);
-        // 取视图矩阵的 right / up（世界→视图矩阵的列），即公告板朝向相机的基础向量
-        vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
-        vec3 up    = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
-        float halfSize = 0.5 * aSize * uSize * uPixelRatio;
-        vec3 corner = centerView.xyz
-                    + (uv.x - 0.5) * halfSize * right
-                    + (uv.y - 0.5) * halfSize * up;
-        gl_Position = projectionMatrix * vec4(corner, 1.0);
-      }
-    `;
+    // Domain labels at semantic cluster centroids; labels carry meaning in addition to color.
+    const domainGroups = new Map<string, { name: string; color: string; nodes: CloudNode[] }>();
+    for (const node of nodes) {
+      const group = domainGroups.get(node.domain ?? 'unclassified') ?? {
+        name: node.domain_name ?? '待分类',
+        color: node.color ?? '#a7b0c0',
+        nodes: [],
+      };
+      group.nodes.push(node);
+      domainGroups.set(node.domain ?? 'unclassified', group);
+    }
+    const domainLabels: THREE.Sprite[] = [];
+    if (labelMode === 'domains') for (const group of domainGroups.values()) {
+      const center = group.nodes.reduce(
+        (sum, node) => sum.add(new THREE.Vector3(node.x ?? 0, node.y ?? 0, node.z ?? 0)),
+        new THREE.Vector3(),
+      ).divideScalar(group.nodes.length);
+      const texture = makeDomainLabelTexture(group.name, group.color);
+      disposableTextures.add(texture);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        opacity: 0.72,
+        depthWrite: false,
+        depthTest: false,
+      });
+      const label = new THREE.Sprite(material);
+      label.position.copy(center).add(new THREE.Vector3(0, 42, 0));
+      label.scale.set(88, 22, 1);
+      label.renderOrder = 5;
+      domainLabels.push(label);
+      scene.add(label);
+    }
 
-    const fragmentShader = /* glsl */ `
-      varying vec3 vColor;
-      varying float vLum;
-      varying float vPulse;
-      varying vec2 vUv;
-      uniform float uCoreLum; // 全局径向亮度进度（0..1，整体抬升中心）
-      uniform float uDimmer;  // 非选中时的整体压暗（0..1，1=正常）
-      void main() {
-        // 用 uv 算径向距离（0..1 居中 → 边缘距离 0.5→1），做中心亮边缘透明的发光圆盘
-        float d = length(vUv - vec2(0.5)) * 2.0; // 0=中心 … 1=边缘
-        float glow = smoothstep(1.0, 0.12, d);
-        float core = smoothstep(0.56, 0.0, d);
-        float alpha = (glow * 0.85 + core * 0.55) * vLum * vPulse * uDimmer;
-        vec3 col = vColor * (0.6 + 0.8 * core) + vec3(0.25) * core;
-        gl_FragColor = vec4(col, alpha);
-      }
-    `;
+    const nodeLabels: THREE.Sprite[] = [];
+    const labelNodes = labelMode === 'nodes'
+      ? nodes
+      : labelMode === 'mentors' ? pickMentorLabelNodes(nodes) : [];
+    for (const node of labelNodes) {
+      const isMentorLabel = labelMode === 'mentors';
+      const texture = isMentorLabel ? makeMentorLabelTexture(node) : makeNodeLabelTexture(node.name);
+      disposableTextures.add(texture);
+      const material = new THREE.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        opacity: isMentorLabel ? 0.82 : 0.9,
+        depthWrite: false,
+        depthTest: false,
+      });
+      const label = new THREE.Sprite(material);
+      label.position.set(node.x ?? 0, (node.y ?? 0) + (isMentorLabel ? 25 : 42), node.z ?? 0);
+      label.scale.set(isMentorLabel ? 64 : 102, isMentorLabel ? 17 : 35.7, 1);
+      label.renderOrder = 6;
+      nodeLabels.push(label);
+      scene.add(label);
+    }
 
-    const instMat = new THREE.ShaderMaterial({
+    // 选中导师拥有独立的场景内姓名标牌；放大后无需把视线移到侧栏才能确认对象。
+    const selectedLabelMaterial = new THREE.SpriteMaterial({
+      transparent: true,
+      opacity: 0.96,
+      depthWrite: false,
+      depthTest: false,
+    });
+    const selectedLabel = new THREE.Sprite(selectedLabelMaterial);
+    selectedLabel.scale.set(112, 28, 1);
+    selectedLabel.renderOrder = 7;
+    selectedLabel.visible = false;
+    scene.add(selectedLabel);
+    let selectedLabelTexture: THREE.CanvasTexture | null = null;
+
+    // One instanced GPU draw for all mentor nodes.
+    const count = nodes.length;
+    const starGeometry = new THREE.InstancedBufferGeometry();
+    starGeometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      -1, -1, 0, 1, -1, 0, 1, 1, 0,
+      1, 1, 0, -1, 1, 0, -1, -1, 0,
+    ], 3));
+    starGeometry.setAttribute('uv', new THREE.Float32BufferAttribute([
+      0, 0, 1, 0, 1, 1,
+      1, 1, 0, 1, 0, 0,
+    ], 2));
+    const instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+    const instanceSize = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+    const instanceLum = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+    const instanceCenter = new THREE.InstancedBufferAttribute(new Float32Array(count * 3), 3);
+    const instanceEmphasis = new THREE.InstancedBufferAttribute(new Float32Array(count), 1);
+    starGeometry.setAttribute('aColor', instanceColor);
+    starGeometry.setAttribute('aSize', instanceSize);
+    starGeometry.setAttribute('aLum', instanceLum);
+    starGeometry.setAttribute('aCenter', instanceCenter);
+    starGeometry.setAttribute('aEmphasis', instanceEmphasis);
+
+    const originalColors: THREE.Color[] = [];
+    const baseSizes = new Float32Array(count);
+    nodes.forEach((node, index) => {
+      const color = nodeColor(node);
+      originalColors.push(color);
+      instanceColor.setXYZ(index, color.r, color.g, color.b);
+      const size = Math.max(10, (node.size ?? 1.2) * (0.9 + 0.55 * (node.lum ?? 0.8)) * 6.2);
+      baseSizes[index] = size;
+      instanceSize.setX(index, size);
+      instanceLum.setX(index, node.lum ?? 0.75);
+      // This attribute is the shader's actual position source. The former code never populated it.
+      instanceCenter.setXYZ(index, node.x ?? 0, node.y ?? 0, node.z ?? 0);
+      instanceEmphasis.setX(index, 1);
+    });
+
+    const starMaterial = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
         uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-        uSize: { value: 2.4 },
-        uCoreLum: { value: 0 },
-        uDimmer: { value: 1 },
+        uMotion: { value: shouldReduceMotion ? 0 : 1 },
+        uPointer: { value: new THREE.Vector2(-10, -10) },
+        uResolution: { value: new THREE.Vector2(renderer.domElement.width, renderer.domElement.height) },
       },
-      vertexShader,
-      fragmentShader,
+      vertexShader: /* glsl */ `
+        attribute vec3 aColor;
+        attribute float aSize;
+        attribute float aLum;
+        attribute vec3 aCenter;
+        attribute float aEmphasis;
+        varying vec3 vColor;
+        varying float vLum;
+        varying float vPulse;
+        varying float vEmphasis;
+        varying vec2 vUv;
+        uniform float uTime;
+        uniform float uPixelRatio;
+        uniform float uMotion;
+        void main() {
+          vColor = aColor;
+          vLum = aLum;
+          vUv = uv;
+          vEmphasis = aEmphasis;
+          vPulse = mix(1.0, 0.9 + 0.1 * sin(uTime * 1.15 + float(gl_InstanceID) * 0.53), uMotion);
+          vec4 centerView = modelViewMatrix * vec4(aCenter, 1.0);
+          float halfSize = 0.5 * aSize * uPixelRatio;
+          centerView.xy += (uv - vec2(0.5)) * halfSize;
+          gl_Position = projectionMatrix * centerView;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vColor;
+        varying float vLum;
+        varying float vPulse;
+        varying float vEmphasis;
+        varying vec2 vUv;
+        uniform vec2 uPointer;
+        uniform vec2 uResolution;
+        void main() {
+          float distanceFromCenter = length(vUv - vec2(0.5)) * 2.0;
+          float halo = smoothstep(1.0, 0.08, distanceFromCenter);
+          float core = smoothstep(0.42, 0.0, distanceFromCenter);
+          vec2 screenUv = gl_FragCoord.xy / max(uResolution, vec2(1.0));
+          float pointerLight = 1.0 - smoothstep(0.02, 0.22, distance(screenUv, uPointer));
+          float alpha = (halo * 0.76 + core * 0.62) * vLum * vPulse * vEmphasis * (1.0 + pointerLight * 0.48);
+          vec3 color = vColor * (0.72 + core * 0.68) + vec3(0.22) * core + vec3(0.1, 0.14, 0.24) * pointerLight;
+          if (alpha < 0.012) discard;
+          gl_FragColor = vec4(color, alpha);
+        }
+      `,
       transparent: true,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
-
-    const stars = new THREE.InstancedMesh(instGeo, instMat, COUNT);
-    stars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    stars.frustumCulled = true;
+    const stars = new THREE.InstancedMesh(starGeometry, starMaterial, count);
+    stars.frustumCulled = false;
     scene.add(stars);
 
-    // 节点实例数据写入（位置 / 颜色 / 大小 / 亮度，尺寸由 build_cloud 的 size*lum 决定）
-    function writeInstances() {
-      const nodesArr = nodesRef.current;
-      const starByNode: Record<string, { node: CloudNode; color: THREE.Color }> = {};
-      const color = new THREE.Color();
-      for (let i = 0; i < nodesArr.length; i++) {
-        const n = nodesArr[i];
-        const p = new THREE.Vector3(n.x ?? 0, n.y ?? 0, n.z ?? 0);
-        stars.setMatrixAt(i, new THREE.Matrix4().setPosition(p));
-        color.set(n.color ?? '#667eea');
-        instanceColor.setXYZ(i, color.r, color.g, color.b);
-        const s = (n.size ?? 1.2) * (0.9 + 0.6 * (n.lum ?? 0.8));
-        instanceSize.setX(i, Math.max(10, s * 7));
-        instanceLum.setX(i, n.lum ?? 0.8);
-        starByNode[n.id] = { node: n, color: color.clone() };
-      }
-      instanceColor.needsUpdate = true;
-      instanceSize.needsUpdate = true;
-      instanceLum.needsUpdate = true;
-      stars.instanceMatrix.needsUpdate = true;
-      starByNodeRef.current = starByNode;
-    }
-    const starByNodeRef = { current: {} as Record<string, { node: CloudNode; color: THREE.Color }> };
-    writeInstances();
+    let animationFrame = 0;
+    let pointerFrame = 0;
+    let isIntersecting = true;
+    let lastFrame = 0;
+    let cameraTween: {
+      start: number;
+      duration: number;
+      fromPosition: THREE.Vector3;
+      controlPosition: THREE.Vector3;
+      toPosition: THREE.Vector3;
+      fromTarget: THREE.Vector3;
+      toTarget: THREE.Vector3;
+      fromFov: number;
+      toFov: number;
+    } | null = null;
+    const pointerNdcTarget = new THREE.Vector2();
+    const pointerNdcCurrent = new THREE.Vector2();
+    const cursorGlowTarget = new THREE.Vector3();
+    let cursorGlowActive = false;
 
-    // ---------- 选中/邻居高亮（改色 + 改透明度） ----------
-    applySelectionRef.current = () => {
-      const sel = selRef.current;
-      const neighborIds = new Set<string>();
-      if (sel) {
-        edgesRef.current.forEach((e) => {
-          if (e.source === sel) neighborIds.add(e.target);
-          if (e.target === sel) neighborIds.add(e.source);
-        });
-      }
-      const dimmer = sel ? 0.14 : 1.0;
-      const isSel = (id: string) => id === sel;
-      const isNeighbor = (id: string) => neighborIds.has(id);
-      instMat.uniforms.uDimmer.value = dimmer;
-      // 选中的星放大，并单独提亮：通过该实例属性覆盖
-      const { current: starByNode } = starByNodeRef;
-      const nodesArr = nodesRef.current;
-      const white = new THREE.Color(0xffffff);
-      for (let i = 0; i < nodesArr.length; i++) {
-        const n = nodesArr[i];
-        const entry = starByNode[n.id];
-        if (!entry) continue;
-        const s = (n.size ?? 1.2) * (0.9 + 0.6 * (n.lum ?? 0.8));
-        if (isSel(n.id)) {
-          instanceSize.setX(i, Math.max(10, s * 7) * 1.55);
-          instanceColor.setXYZ(i, white.r, white.g, white.b);
-          instanceLum.setX(i, 1.0);
-        } else if (!sel || isNeighbor(n.id)) {
-          // 未选中态：保持原色；邻居态保持原样（相对 dimmer 提亮由 uDimmer 全局体现）
-          instanceColor.setXYZ(i, entry.color.r, entry.color.g, entry.color.b);
-          instanceSize.setX(i, Math.max(10, s * 7));
-          instanceLum.setX(i, n.lum ?? 0.8);
-        } else {
-          // 其余压暗（uDimmer 已全局压暗，这里再叠一层）
-          instanceColor.setXYZ(i, entry.color.r * 0.35, entry.color.g * 0.35, entry.color.b * 0.35);
-          instanceLum.setX(i, (n.lum ?? 0.8) * 0.3);
-        }
-      }
-      instanceColor.needsUpdate = true;
-      instanceSize.needsUpdate = true;
-      instanceLum.needsUpdate = true;
-      selectedNodesRef.current = neighborIds;
+    const renderOnce = (time = performance.now()) => {
+      starMaterial.uniforms.uTime.value = time * 0.001;
+      renderer.render(scene, camera);
     };
-    applySelectionRef.current();
 
-    // ---------- 交互：拾取导师星（屏幕投影距离近似，星点为 billboard，视觉尺寸小） ----------
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
-    const tmpMatrix = new THREE.Matrix4();
-    function pickByDistance(clientX: number, clientY: number): number | null {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-      raycaster.setFromCamera(mouse, camera);
-      const nodesArr = nodesRef.current;
-      const ray = raycaster.ray;
-      let bestIdx: number | null = null;
-      let bestD = Infinity;
-      for (let i = 0; i < nodesArr.length; i++) {
-        stars.getMatrixAt(i, tmpMatrix);
-        const c = new THREE.Vector3().setFromMatrixPosition(tmpMatrix);
-        const proj = new THREE.Vector3().subVectors(c, ray.origin);
-        const t = proj.dot(ray.direction);
-        const clampT = Math.max(0, t);
-        const closest = new THREE.Vector3().copy(ray.origin).addScaledVector(ray.direction, clampT);
-        const dist = closest.distanceTo(c);
-        if (dist < bestD) {
-          bestD = dist;
-          bestIdx = i;
-        }
-      }
-      // 阈值：星体视觉半径内才算命中
-      if (bestIdx !== null && bestD < 26) return bestIdx;
-      return null;
-    }
-
-    const onPointerMove = (e: PointerEvent) => {
-      renderer.domElement.style.cursor = 'grab';
-      const idx = pickByDistance(e.clientX, e.clientY);
-      if (idx !== null) {
-        renderer.domElement.style.cursor = 'pointer';
-        const node = nodesRef.current[idx];
-        if (node && hoveredRef.current !== node.id) {
-          hoveredRef.current = node.id;
-          hoverInfoRef.current = { x: e.clientX, y: e.clientY, node };
-          updateHoverCard();
-          onHoverNodeRef.current?.(node.id);
-        }
-      } else {
-        if (hoveredRef.current !== null) {
-          hoveredRef.current = null;
-          hoverInfoRef.current = null;
-          if (hoverRef.current) hoverRef.current.style.display = 'none';
-          onHoverNodeRef.current?.(null);
-        }
-        renderer.domElement.style.cursor = 'grab';
+    const scheduleFrame = () => {
+      if (!animationFrame && isIntersecting && !document.hidden) {
+        animationFrame = requestAnimationFrame(animate);
       }
     };
-    const onClick = (e: MouseEvent) => {
-      if (e.detail > 1) return;
-      const idx = pickByDistance(e.clientX, e.clientY);
-      onSelectNode?.(idx !== null ? nodesRef.current[idx]?.id ?? null : null);
-    };
-    renderer.domElement.addEventListener('pointermove', onPointerMove);
-    renderer.domElement.addEventListener('click', onClick);
 
-    // ---------- 悬浮卡 ----------
-    function updateHoverCard() {
-      const el = hoverRef.current;
-      if (!el) return;
-      const info = hoverInfoRef.current;
-      if (!info) {
-        el.style.display = 'none';
+    function animate(time: number) {
+      animationFrame = 0;
+      if (!isIntersecting || document.hidden) return;
+      if (time - lastFrame < 1000 / 45) {
+        scheduleFrame();
         return;
       }
-      const { x, y, node } = info;
-      el.style.display = 'block';
-      el.style.left = `${x + 14}px`;
-      el.style.top = `${y + 8}px`;
-      el.innerHTML = `
-        <div class="cloud-hover-name">${escapeHtml(node.name)}</div>
-        <div class="cloud-hover-dept">${escapeHtml(node.department ?? '')}</div>
-        ${node.domain_name ? `<div class="cloud-hover-domain">${escapeHtml(node.domain_name)}</div>` : ''}
-      `;
-    }
-    function escapeHtml(s: string): string {
-      return s.replace(/[&<>"']/g, (c) => (
-        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string
-      ));
+      const deltaSeconds = lastFrame ? Math.min(0.05, (time - lastFrame) / 1000) : 0;
+      lastFrame = time;
+
+      if (cameraTween) {
+        const progress = Math.min(1, (time - cameraTween.start) / cameraTween.duration);
+        const eased = progress < 0.5
+          ? 4 * progress * progress * progress
+          : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+        const inverse = 1 - eased;
+        camera.position.set(
+          inverse * inverse * cameraTween.fromPosition.x + 2 * inverse * eased * cameraTween.controlPosition.x + eased * eased * cameraTween.toPosition.x,
+          inverse * inverse * cameraTween.fromPosition.y + 2 * inverse * eased * cameraTween.controlPosition.y + eased * eased * cameraTween.toPosition.y,
+          inverse * inverse * cameraTween.fromPosition.z + 2 * inverse * eased * cameraTween.controlPosition.z + eased * eased * cameraTween.toPosition.z,
+        );
+        controls.target.lerpVectors(cameraTween.fromTarget, cameraTween.toTarget, eased);
+        camera.fov = THREE.MathUtils.lerp(cameraTween.fromFov, cameraTween.toFov, eased);
+        camera.updateProjectionMatrix();
+        if (progress >= 1) cameraTween = null;
+      }
+      if (!shouldReduceMotion) {
+        pointerNdcCurrent.lerp(pointerNdcTarget, 0.075);
+        coreGroup.position.set(
+          targetX + pointerNdcCurrent.x * 7,
+          targetY + pointerNdcCurrent.y * 2.5,
+          targetZ - pointerNdcCurrent.x * 4,
+        );
+        armDust.rotation.x = pointerNdcCurrent.y * 0.006;
+        armMist.rotation.x = pointerNdcCurrent.y * 0.004;
+        if (cursorGlowActive) cursorGlow.position.lerp(cursorGlowTarget, 0.14);
+      }
+      controls.update(deltaSeconds);
+      armDust.rotation.y = time * 0.0000025;
+      armMist.rotation.y = -time * 0.0000015;
+      renderOnce(time);
+      if (!shouldReduceMotion || cameraTween) scheduleFrame();
     }
 
-    // ---------- 动画 ----------
-    let raf = 0;
-    function animate() {
-      raf = requestAnimationFrame(animate);
-      controls.update();
-      const t = performance.now() * 0.001;
-      instMat.uniforms.uTime.value = t;
-      bgDust.rotation.y = t * 0.004; // 背景与旋臂同步缓转
-      renderer.render(scene, camera);
-    }
-    animate();
-
-    // ---------- 尺寸自适应 ----------
-    const onResize = () => {
-      const w = mount.clientWidth;
-      const h = mount.clientHeight;
-      if (!w || !h) return;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+    const updateSelectedEdges = (selected: string | undefined) => {
+      const positions: number[] = [];
+      if (selected) {
+        for (const edge of edges) {
+          if (edge.source !== selected && edge.target !== selected) continue;
+          const source = nodeById.get(edge.source);
+          const target = nodeById.get(edge.target);
+          if (!source || !target) continue;
+          positions.push(source.x ?? 0, source.y ?? 0, source.z ?? 0, target.x ?? 0, target.y ?? 0, target.z ?? 0);
+        }
+      }
+      selectedEdgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      selectedEdgeGeometry.computeBoundingSphere();
     };
-    const ro = new ResizeObserver(onResize);
-    ro.observe(mount);
 
-    // 初始选中态
+    applySelectionRef.current = () => {
+      const selected = selectedRef.current;
+      const neighbours = new Set<string>();
+      if (selected) {
+        for (const edge of edges) {
+          if (edge.source === selected) neighbours.add(edge.target);
+          if (edge.target === selected) neighbours.add(edge.source);
+        }
+      }
+      nodes.forEach((node, index) => {
+        const isSelected = node.id === selected;
+        const isNeighbour = neighbours.has(node.id);
+        const color = originalColors[index];
+        if (isSelected) {
+          instanceColor.setXYZ(index, 1, 1, 1);
+          instanceSize.setX(index, baseSizes[index] * 1.65);
+          instanceLum.setX(index, 1);
+          instanceEmphasis.setX(index, 1);
+        } else {
+          instanceColor.setXYZ(index, color.r, color.g, color.b);
+          instanceSize.setX(index, baseSizes[index] * (isNeighbour ? 1.18 : 1));
+          instanceLum.setX(index, node.lum ?? 0.75);
+          instanceEmphasis.setX(index, selected ? (isNeighbour ? 0.9 : 0.16) : 1);
+        }
+      });
+      instanceColor.needsUpdate = true;
+      instanceSize.needsUpdate = true;
+      instanceLum.needsUpdate = true;
+      instanceEmphasis.needsUpdate = true;
+      edgeMaterial.opacity = selected ? 0.045 : 0.16;
+      domainLabels.forEach((label) => {
+        label.visible = !selected;
+      });
+      nodeLabels.forEach((label) => {
+        label.visible = !selected;
+      });
+      const selectedNode = selected ? nodeById.get(selected) : undefined;
+      selectedLabelTexture?.dispose();
+      selectedLabelTexture = null;
+      selectedLabelMaterial.map = null;
+      selectedLabel.visible = false;
+      if (selectedNode) {
+        if (hoverRef.current) hoverRef.current.style.display = 'none';
+        selectedLabelTexture = makeSelectedLabelTexture(selectedNode);
+        selectedLabelMaterial.map = selectedLabelTexture;
+        selectedLabelMaterial.needsUpdate = true;
+        selectedLabel.position.set(
+          selectedNode.x ?? 0,
+          (selectedNode.y ?? 0) + 44,
+          selectedNode.z ?? 0,
+        );
+        selectedLabel.visible = true;
+      }
+      updateSelectedEdges(selected);
+      renderOnce();
+    };
+
+    focusNodeRef.current = (id: string) => {
+      const node = nodeById.get(id);
+      if (!node) return;
+      const target = new THREE.Vector3(node.x ?? 0, node.y ?? 0, node.z ?? 0);
+      const direction = camera.position.clone().sub(controls.target);
+      if (direction.lengthSq() < 0.001) direction.set(0, 0.5, 1);
+      direction.normalize();
+      const destination = target.clone().add(direction.clone().multiplyScalar(360));
+      controls.autoRotate = false;
+      if (shouldReduceMotion) {
+        camera.position.copy(destination);
+        controls.target.copy(target);
+        camera.fov = 43;
+        camera.updateProjectionMatrix();
+        controls.update();
+        renderOnce();
+      } else {
+        const side = direction.clone().cross(new THREE.Vector3(0, 1, 0));
+        if (side.lengthSq() < 0.001) side.set(1, 0, 0);
+        side.normalize().multiplyScalar(54);
+        const controlPosition = camera.position.clone().lerp(destination, 0.48).add(side).add(new THREE.Vector3(0, 42, 0));
+        cameraTween = {
+          start: performance.now(),
+          duration: 880,
+          fromPosition: camera.position.clone(),
+          controlPosition,
+          toPosition: destination,
+          fromTarget: controls.target.clone(),
+          toTarget: target,
+          fromFov: camera.fov,
+          toFov: 43,
+        };
+        scheduleFrame();
+      }
+    };
+
+    resetViewRef.current = () => {
+      cameraTween = null;
+      camera.position.copy(defaultCameraPosition);
+      controls.target.copy(sceneTarget);
+      camera.fov = 48;
+      camera.updateProjectionMatrix();
+      controls.autoRotate = !shouldReduceMotion;
+      controls.update();
+      renderOnce();
+      if (!shouldReduceMotion) scheduleFrame();
+    };
+
     applySelectionRef.current();
 
-    // ---------- 清理 ----------
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const temporaryPoint = new THREE.Vector3();
+    const cursorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -targetY);
+    const pickNode = (clientX: number, clientY: number): number | null => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((clientX - bounds.left) / bounds.width) * 2 - 1;
+      pointer.y = -((clientY - bounds.top) / bounds.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      let bestIndex: number | null = null;
+      let bestDistanceSquared = Number.POSITIVE_INFINITY;
+      for (let index = 0; index < nodes.length; index += 1) {
+        const node = nodes[index];
+        temporaryPoint.set(node.x ?? 0, node.y ?? 0, node.z ?? 0);
+        const distanceSquared = raycaster.ray.distanceSqToPoint(temporaryPoint);
+        if (distanceSquared < bestDistanceSquared) {
+          bestDistanceSquared = distanceSquared;
+          bestIndex = index;
+        }
+      }
+      // Department labels are the primary overview controls, so their hit target is
+      // deliberately much larger than a mentor star's precise selection radius.
+      const threshold = labelMode === 'nodes'
+        ? Math.max(52, camera.position.distanceTo(controls.target) * 0.026)
+        : Math.max(15, camera.position.distanceTo(controls.target) * 0.012);
+      return bestIndex !== null && bestDistanceSquared <= threshold * threshold ? bestIndex : null;
+    };
+
+    const hideHover = () => {
+      if (pointerFrame) {
+        cancelAnimationFrame(pointerFrame);
+        pointerFrame = 0;
+      }
+      if (hoverRef.current) hoverRef.current.style.display = 'none';
+      if (pointerGlowRef.current) pointerGlowRef.current.style.opacity = '0';
+      starMaterial.uniforms.uPointer.value.set(-10, -10);
+      pointerNdcTarget.set(0, 0);
+      cursorGlowActive = false;
+      cursorGlow.visible = false;
+      onHoverRef.current?.(null);
+      renderOnce();
+    };
+
+    let hoveredId: string | null = null;
+    let pointerPosition = { x: 0, y: 0 };
+    const updateHover = () => {
+      pointerFrame = 0;
+      const index = pickNode(pointerPosition.x, pointerPosition.y);
+      if (pointerGlowRef.current && !shouldReduceMotion) {
+        const bounds = renderer.domElement.getBoundingClientRect();
+        pointerGlowRef.current.style.opacity = '1';
+        pointerGlowRef.current.style.transform = `translate3d(${pointerPosition.x - bounds.left - 190}px, ${pointerPosition.y - bounds.top - 190}px, 0)`;
+      }
+      const intersection = raycaster.ray.intersectPlane(cursorPlane, cursorGlowTarget);
+      cursorGlowActive = Boolean(intersection && cursorGlowTarget.length() < 900);
+      cursorGlow.visible = cursorGlowActive;
+      if (cursorGlowActive) {
+        cursorGlowTarget.y = 4;
+        if (shouldReduceMotion) cursorGlow.position.copy(cursorGlowTarget);
+      }
+      if (selectedRef.current) {
+        if (hoverRef.current) hoverRef.current.style.display = 'none';
+        if (shouldReduceMotion) renderOnce();
+        return;
+      }
+      const node = index === null ? undefined : nodes[index];
+      if (!node) {
+        renderer.domElement.style.cursor = 'grab';
+        if (hoveredId !== null) {
+          hoveredId = null;
+          hideHover();
+        }
+        return;
+      }
+      renderer.domElement.style.cursor = 'pointer';
+      if (hoveredId !== node.id) {
+        hoveredId = node.id;
+        onHoverRef.current?.(node.id);
+      }
+      if (hoverNameRef.current) hoverNameRef.current.textContent = node.name;
+      if (hoverDeptRef.current) hoverDeptRef.current.textContent = node.department || '院系待补充';
+      if (hoverDomainRef.current) hoverDomainRef.current.textContent = node.domain_name || '待分类';
+      if (hoverRef.current) {
+        hoverRef.current.style.display = 'block';
+        hoverRef.current.style.left = `${Math.min(pointerPosition.x + 16, window.innerWidth - 248)}px`;
+        hoverRef.current.style.top = `${Math.min(pointerPosition.y + 12, window.innerHeight - 112)}px`;
+      }
+      if (shouldReduceMotion) renderOnce();
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      pointerPosition = { x: event.clientX, y: event.clientY };
+      const bounds = renderer.domElement.getBoundingClientRect();
+      const normalizedX = (event.clientX - bounds.left) / Math.max(1, bounds.width);
+      const normalizedY = (event.clientY - bounds.top) / Math.max(1, bounds.height);
+      starMaterial.uniforms.uPointer.value.set(normalizedX, 1 - normalizedY);
+      pointerNdcTarget.set(normalizedX * 2 - 1, -(normalizedY * 2 - 1));
+      if (!pointerFrame) pointerFrame = requestAnimationFrame(updateHover);
+    };
+    let pointerDown = { x: 0, y: 0 };
+    const onPointerDown = (event: PointerEvent) => {
+      pointerDown = { x: event.clientX, y: event.clientY };
+    };
+    const onClick = (event: MouseEvent) => {
+      if (Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 5) return;
+      const index = pickNode(event.clientX, event.clientY);
+      hideHover();
+      onSelectRef.current?.(index === null ? null : nodes[index].id);
+    };
+    renderer.domElement.addEventListener('pointermove', onPointerMove);
+    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerleave', hideHover);
+    renderer.domElement.addEventListener('click', onClick);
+
+    const onResize = () => {
+      const width = mount.clientWidth;
+      const height = mount.clientHeight;
+      if (!width || !height) return;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      defaultCameraPosition = makeDefaultCameraPosition(camera.aspect);
+      if (!selectedRef.current) {
+        camera.position.copy(defaultCameraPosition);
+        controls.target.copy(sceneTarget);
+        controls.update();
+      }
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(width, height, false);
+      starMaterial.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
+      starMaterial.uniforms.uResolution.value.set(renderer.domElement.width, renderer.domElement.height);
+      renderOnce();
+    };
+    const resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(mount);
+    const intersectionObserver = new IntersectionObserver(([entry]) => {
+      isIntersecting = entry.isIntersecting;
+      if (isIntersecting) scheduleFrame();
+      else if (animationFrame) cancelAnimationFrame(animationFrame);
+    });
+    intersectionObserver.observe(mount);
+    const onVisibilityChange = () => {
+      if (document.hidden && animationFrame) cancelAnimationFrame(animationFrame);
+      else scheduleFrame();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    const onControlsChange = () => renderOnce();
+    controls.addEventListener('change', onControlsChange);
+    scheduleFrame();
+
     return () => {
-      cancelAnimationFrame(raf);
-      ro.disconnect();
+      cancelAnimationFrame(animationFrame);
+      cancelAnimationFrame(pointerFrame);
+      resizeObserver.disconnect();
+      intersectionObserver.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerleave', hideHover);
       renderer.domElement.removeEventListener('click', onClick);
+      controls.removeEventListener('change', onControlsChange);
+      controls.stopListenToKeyEvents();
       controls.dispose();
-      instGeo.dispose();
-      instMat.dispose();
-      // CanvasTexture 本身有 dispose；不要 Object.values(tex) 遍历——那会对字符串等属性误调用
-      nebulaTex.dispose();
-      coreTex.dispose();
-      ringTex.dispose();
-      stars.dispose();
+      selectedLabelTexture?.dispose();
+      scene.traverse((object) => {
+        const renderable = object as THREE.Object3D & {
+          geometry?: THREE.BufferGeometry;
+          material?: THREE.Material | THREE.Material[];
+        };
+        renderable.geometry?.dispose();
+        if (Array.isArray(renderable.material)) renderable.material.forEach((material) => material.dispose());
+        else renderable.material?.dispose();
+      });
+      disposableTextures.forEach((texture) => texture.dispose());
       renderer.dispose();
       if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+      applySelectionRef.current = () => undefined;
+      focusNodeRef.current = () => undefined;
+      resetViewRef.current = () => undefined;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes]);
+  }, [edges, nodes, reducedMotion, labelMode, targetX, targetY, targetZ]);
 
-  // 选中变化
   useEffect(() => {
-    selRef.current = selectedId ?? undefined;
     applySelectionRef.current();
   }, [selectedId]);
 
+  useEffect(() => {
+    if (focusRequest) focusNodeRef.current(focusRequest.id);
+  }, [focusRequest]);
+
+  useEffect(() => {
+    if (resetSignal !== undefined) resetViewRef.current();
+  }, [resetSignal]);
+
   return (
     <div
+      ref={mountRef}
       className={className}
+      role="img"
+      aria-label={labelMode === 'nodes'
+        ? `三维院系导航星图，共 ${nodes.length} 个院系，等权双环排列。可拖拽旋转、滚轮缩放，方向键平移。`
+        : `三维导师研究星图，共 ${nodes.length} 位导师。可拖拽旋转、滚轮缩放，方向键平移。`}
+      tabIndex={0}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') onSelectRef.current?.(null);
+        if (event.key === '0') resetViewRef.current();
+      }}
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'radial-gradient(ellipse at center, rgba(40,50,90,0.25) 0%, rgba(3,3,10,1) 72%)',
-        cursor: 'grab',
         overflow: 'hidden',
+        background: 'radial-gradient(ellipse at 50% 44%, rgba(26, 52, 112, 0.3) 0%, rgba(7, 15, 39, 0.48) 38%, #02040c 76%)',
+        outline: 'none',
         ...style,
       }}
-      ref={mountRef}
     >
-      {/* 悬浮卡（position fixed，跟随鼠标） */}
+      <div
+        ref={pointerGlowRef}
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          zIndex: 2,
+          width: 380,
+          height: 380,
+          borderRadius: '50%',
+          pointerEvents: 'none',
+          opacity: 0,
+          background: 'radial-gradient(circle, rgba(122, 158, 255, 0.13) 0%, rgba(72, 111, 213, 0.055) 42%, rgba(20, 39, 89, 0) 72%)',
+          mixBlendMode: 'screen',
+          willChange: 'transform, opacity',
+          transition: 'opacity 180ms ease-out',
+        }}
+      />
       <div
         ref={hoverRef}
+        aria-hidden="true"
         style={{
           display: 'none',
           position: 'fixed',
-          zIndex: 30,
+          zIndex: 40,
+          width: 228,
           pointerEvents: 'none',
-          background: 'rgba(10,14,30,0.9)',
-          border: '1px solid rgba(140,160,255,0.35)',
-          borderRadius: 8,
-          padding: '6px 10px',
-          color: '#fff',
-          fontSize: 12,
-          boxShadow: '0 4px 18px rgba(0,0,0,0.5)',
-          whiteSpace: 'nowrap',
+          background: 'rgba(7, 12, 27, 0.94)',
+          border: '1px solid rgba(159, 181, 236, 0.28)',
+          borderRadius: 12,
+          padding: '10px 12px',
+          color: '#f7f9ff',
+          boxShadow: '0 12px 34px rgba(0, 0, 0, 0.42)',
+          backdropFilter: 'blur(14px)',
         }}
-      />
+      >
+        <div ref={hoverNameRef} style={{ fontSize: 14, fontWeight: 650, lineHeight: 1.4 }} />
+        <div ref={hoverDeptRef} style={{ marginTop: 3, color: 'rgba(224, 231, 249, 0.66)', fontSize: 12 }} />
+        <div ref={hoverDomainRef} style={{ marginTop: 7, color: '#a9c0ff', fontSize: 12 }} />
+      </div>
       {loading && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'rgba(255,255,255,0.6)',
-            background: 'rgba(0,0,0,0.35)',
-            pointerEvents: 'none',
-            fontSize: 14,
-            letterSpacing: 0.1,
-          }}
-        >
-          正在加载星云图…
-        </div>
-      )}
-      {!loading && nodes.length > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            left: 16,
-            bottom: 16,
-            fontSize: 12,
-            color: 'rgba(255,255,255,0.4)',
-            pointerEvents: 'none',
-            letterSpacing: 0.04,
-          }}
-        >
-          <b style={{ color: '#8ab0ff' }}>拖拽</b> 旋转 · <b style={{ color: '#8ab0ff' }}>滚轮</b> 缩放 ·{' '}
-          <b style={{ color: '#8ab0ff' }}>点击</b> 导师星 查看详情
+        <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: '#c8d5f4' }}>
+          正在建立研究星图…
         </div>
       )}
     </div>

@@ -60,6 +60,14 @@ Rules:
    direction and recency; leave unsupported admissions claims unknown.
 """.strip()
 
+_PREPARATION_REPAIR_CONTEXT = """
+The previous structured response validated as JSON but omitted a required
+search boundary. Return the complete schema again. `domain_codes` must contain
+at least one allowed code and `primary_directions` must contain at least one
+specific direction grounded in the user's message, projects, or topics. Do not
+return empty arrays for either field when the user supplied a research topic.
+""".strip()
+
 _CANDIDATE_SYSTEM_CONTEXT = """
 You are the evidence-analysis and semantic-matching agent in a USTC mentor
 workflow. Assess a verified USTC mentor against the user's real project
@@ -229,10 +237,58 @@ class StructuredMentorReasoner:
             raise ValueError(
                 f"Model returned unsupported domain codes: {invalid_codes}"
             )
+        if not preparation.domain_codes or not preparation.primary_directions:
+            # Some OpenAI-compatible models occasionally satisfy the JSON
+            # syntax/schema while leaving semantic arrays empty. Give the model
+            # one focused repair pass before using the deterministic routing
+            # fallback below.
+            try:
+                repaired = self._generate(
+                    agent_name="model_driven_domain_expert_agent_repair",
+                    system_context=(
+                        _PREPARATION_SYSTEM_CONTEXT
+                        + "\n\n"
+                        + _PREPARATION_REPAIR_CONTEXT
+                    ),
+                    payload={
+                        **payload,
+                        "previous_preparation": preparation.model_dump(mode="json"),
+                        "validation_error": (
+                            "domain_codes and primary_directions must both be non-empty"
+                        ),
+                    },
+                    schema=ModelResearchPreparation,
+                )
+                if repaired.domain_codes or repaired.primary_directions:
+                    preparation = repaired
+                    invalid_codes = [
+                        code
+                        for code in preparation.domain_codes
+                        if code not in _DOMAIN_CODES
+                    ]
+                    if invalid_codes:
+                        raise ValueError(
+                            f"Model returned unsupported domain codes: {invalid_codes}"
+                        )
+            except Exception as exc:  # noqa: BLE001 - fallback is intentional
+                self.session.notes.append(
+                    f"Structured preparation repair unavailable: {type(exc).__name__}."
+                )
+
         if not preparation.domain_codes:
-            raise ValueError("Model returned no domain_codes")
+            inferred_codes = _infer_domain_codes(intent, preparation)
+            preparation = preparation.model_copy(update={"domain_codes": inferred_codes})
+            self.session.notes.append(
+                "Domain codes were routed deterministically from the supplied user context."
+            )
         if not preparation.primary_directions:
-            raise ValueError("Model returned no primary_directions")
+            inferred_directions = _infer_primary_directions(intent, preparation)
+            preparation = preparation.model_copy(
+                update={"primary_directions": inferred_directions}
+            )
+            self.session.notes.append(
+                "Primary directions were recovered from the supplied user context."
+            )
         self.session.preparation = preparation
         self._preparation_trace_id = intent.trace_id
         return preparation
@@ -753,22 +809,22 @@ class AgenticMentorResearchTool:
         self, intent: IntentPacket, domain_judgements: list[DomainJudgement]
     ):
         preparation = self.reasoner.prepare(intent)
+        # Preparation is an evidence-seeking plan, not permission to replace
+        # the user's topic with a broad model-generated parent.  Keep the
+        # original concepts and only use the contract's typed recall aliases;
+        # adjacent directions remain audit context for paper reasoning.
+        contract_terms = intent.query_contract.expanded_terms
         semantic_intent = intent.model_copy(
             deep=True,
             update={
                 "research_topics": _unique(
                     [
-                        *preparation.primary_directions,
-                        *preparation.adjacent_directions,
+                        *intent.research_topics,
+                        *contract_terms,
                     ]
                 ),
-                "methods": _unique([*intent.methods, *preparation.methods]),
-                "application_domains": _unique(
-                    [
-                        *intent.application_domains,
-                        *preparation.application_domains,
-                    ]
-                ),
+                "methods": _unique(intent.methods),
+                "application_domains": _unique(intent.application_domains),
             },
         )
         started = perf_counter()
@@ -998,3 +1054,74 @@ def _unique(values: list[str]) -> list[str]:
             seen.add(key)
             output.append(cleaned)
     return output
+
+
+def _infer_domain_codes(
+    intent: IntentPacket, preparation: ModelResearchPreparation
+) -> list[str]:
+    """Infer routing domains only from explicit user/model context.
+
+    This is a search-router safeguard, not a mentor claim. It prevents one
+    malformed model response from turning a valid topic into an unrecoverable
+    workflow while keeping the allowed domain vocabulary closed.
+    """
+
+    values = [
+        *intent.research_topics,
+        *intent.methods,
+        *intent.application_domains,
+        *preparation.primary_directions,
+        *preparation.adjacent_directions,
+        intent.raw_message,
+    ]
+    text = " ".join(values).casefold()
+    rules = (
+        (
+            "cyber_security",
+            ("网络安全", "系统安全", "信息安全", "cyber", "security", "privacy"),
+        ),
+        (
+            "mathematics_statistics",
+            ("数学", "统计", "概率", "几何", "拓扑", "math", "statistics", "theorem"),
+        ),
+        (
+            "computer_systems",
+            ("计算机系统", "软件系统", "云原生", "量子计算", "computer systems", "distributed systems"),
+        ),
+        (
+            "artificial_intelligence",
+            (
+                "人工智能", "机器学习", "深度学习", "推荐系统", "大模型", "智能体",
+                "ai", "machine learning", "deep learning", "recommendation", "llm",
+            ),
+        ),
+    )
+    inferred = [
+        code
+        for code, keywords in rules
+        if any(_keyword_present(text, keyword) for keyword in keywords)
+    ]
+    return inferred
+
+
+def _keyword_present(text: str, keyword: str) -> bool:
+    if any("\u4e00" <= char <= "\u9fff" for char in keyword):
+        return keyword in text
+    return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", text) is not None
+
+
+def _infer_primary_directions(
+    intent: IntentPacket, preparation: ModelResearchPreparation
+) -> list[str]:
+    values = _unique(
+        [
+            *intent.research_topics,
+            *intent.application_domains,
+            *preparation.adjacent_directions,
+            *preparation.methods,
+        ]
+    )
+    if values:
+        return values[:3]
+    message = " ".join(intent.raw_message.split()).strip()
+    return [message[:120] or "人工智能导师匹配"]

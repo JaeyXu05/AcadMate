@@ -24,6 +24,7 @@ from backend.mentor_workflow.ustc_sources import (
     NullInternalMentorRag,
     UstcOfficialMentorSource,
 )
+from backend.mentor_workflow.query_semantics import build_query_contract
 
 
 class MentorResearchTool(Protocol):
@@ -216,16 +217,21 @@ class PaperCatalogMentorResearchTool:
 def _search_concepts(
     intent: IntentPacket, domain_judgements: list[DomainJudgement]
 ) -> list[str]:
+    contract = intent.query_contract
+    if not contract.canonical_query:
+        contract = build_query_contract(
+            intent.raw_message,
+            intent.research_topics,
+            intent.methods,
+            intent.application_domains,
+        )
     return _unique(
         [
             *intent.research_topics,
             *intent.methods,
             *intent.application_domains,
-            *[
-                concept
-                for judgement in domain_judgements
-                for concept in judgement.search_concepts
-            ],
+            contract.canonical_query,
+            *contract.expanded_terms,
         ]
     )
 

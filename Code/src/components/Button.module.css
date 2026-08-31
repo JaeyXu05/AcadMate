@@ -6,62 +6,47 @@
   border: none;
   cursor: pointer;
   font-weight: 500;
-  border-radius: var(--radius-md);
-  transition: transform 0.15s, box-shadow 0.15s, opacity 0.15s, border-color 0.15s;
+  border-radius: 8px;
+  transition: opacity 0.15s, border-color 0.15s;
   user-select: none;
-}
-
-.btn:hover {
-  transform: translateY(-2px);
-}
-
-.btn:active {
-  transform: translateY(0);
 }
 
 .btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-  transform: none;
-  box-shadow: none;
 }
 
-/* 品牌渐变主按钮 */
 .brand {
-  background: var(--grad-brand);
+  background: #4f46e5;
   color: #fff;
 }
 .brand:hover {
-  box-shadow: var(--shadow-brand);
+  background: #6366f1;
+  opacity: 1;
 }
 
-/* 描边幽灵按钮 */
 .ghost {
   background: transparent;
-  color: var(--color-text-2);
-  border: 1px solid var(--color-border);
+  color: #57534e;
+  border: 1px solid rgba(28, 25, 23, 0.12);
 }
 .ghost:hover {
-  border-color: var(--color-brand-soft);
-  color: var(--color-text);
-  box-shadow: var(--shadow-soft);
+  border-color: rgba(28, 25, 23, 0.28);
+  color: #1c1917;
 }
 
-/* 透明文字按钮 */
 .text {
   background: transparent;
-  color: var(--color-text-2);
+  color: #57534e;
 }
 .text:hover {
-  color: var(--color-text);
+  color: #1c1917;
 }
 
-/* 尺寸 */
 .small {
   height: 30px;
   padding: 0 12px;
   font-size: 13px;
-  border-radius: var(--radius-sm);
 }
 .medium {
   height: 40px;
@@ -71,6 +56,5 @@
 .large {
   height: 48px;
   padding: 0 32px;
-  font-size: 17px;
-  border-radius: var(--radius-lg);
+  font-size: 16px;
 }

@@ -142,7 +142,7 @@ def test_invalid_agent_schema_is_recorded_as_schema_validation_error():
     assert state.errors[-1].kind == WorkflowErrorKind.schema_validation
 
 
-def test_empty_research_stops_at_retry_limit_without_infinite_loop():
+def test_empty_research_completes_as_auditable_no_match_without_retry_loop():
     tool = SequenceResearchTool()
     orchestrator = MentorWorkflowOrchestrator(
         InMemoryStateStore(),
@@ -154,7 +154,11 @@ def test_empty_research_stops_at_retry_limit_without_infinite_loop():
         MentorWorkflowRequest(message="find AI mentors", research_topics=["AI"])
     )
 
-    assert state.status == WorkflowStatus.failed
-    assert len(state.retries) == 2
-    assert tool.local_calls == 3
-    assert state.errors[-1].kind == WorkflowErrorKind.evidence_insufficient
+    assert state.status == WorkflowStatus.completed
+    assert state.review_decision is not None
+    assert state.review_decision.status.value == "PASS"
+    assert state.candidates == []
+    assert state.final_result is not None
+    assert state.final_result.mentors == []
+    assert len(state.retries) == 0
+    assert tool.local_calls == 1

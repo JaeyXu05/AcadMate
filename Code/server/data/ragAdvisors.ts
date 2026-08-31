@@ -1,7 +1,7 @@
 /**
  * 真实 RAG 导师数据接入（D 侧 service 层映射）。
  *
- * 读取 C 产出的 `paper-claw-master/data/ustc_mentor_rag.json`（715 导师 / 1580 证据），
+ * 读取 C 产出的 `paper-claw-master/data/ustc_mentor_rag.json`（完整进仓：721 导师 / 1747 证据），
  * 把 `CandidateMentor` 结构映射为前端契约 `AdvisorDetail`。
  *
  * 协作铁律：真实字段与前端契约不符时在 D 的 service/server 层做映射，不改 A/C 输出格式、
@@ -25,6 +25,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { cleanTopics } from './topicBoilerplate';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,6 +49,11 @@ export interface RagMentor {
     academic_title?: string;
     mentor_role?: string;
     paper_platforms?: string;
+    profile_bio?: string;
+    profile_email?: string;
+    profile_office?: string;
+    profile_graduated_from?: string;
+    topics_source?: number;
   };
 }
 
@@ -58,6 +64,8 @@ export interface RagEvidence {
   source_uri?: string;
   title?: string;
   extracted_fact?: string;
+  locator?: string;
+  retrieved_at?: string;
   freshness?: string;
   confidence?: number;
   metadata?: Record<string, unknown>;
@@ -100,7 +108,12 @@ class RagAdvisorStore {
     }
     try {
       const raw = JSON.parse(fs.readFileSync(p, 'utf-8'));
-      this.candidates = Array.isArray(raw.candidates) ? raw.candidates : [];
+      this.candidates = (Array.isArray(raw.candidates) ? raw.candidates : []).map(
+        (item: RagMentor) => ({
+          ...item,
+          research_topics: cleanTopics(item?.research_topics, item?.mentor_name),
+        }),
+      );
       this.evidence = Array.isArray(raw.evidence) ? raw.evidence : [];
       this.loadedPath = p;
       for (const c of this.candidates) {
@@ -156,23 +169,36 @@ export function toAdvisorDetail(c: RagMentor): {
   recruiting?: string;
   recentPapers?: { title: string; year?: number; venue?: string }[];
 } {
-  const topics = Array.isArray(c.research_topics) ? c.research_topics : [];
-  const pubs = Array.isArray(c.publications) ? c.publications : [];
+  const topics = cleanTopics(c.research_topics, c.mentor_name);
   const evidence = store.getEvidenceFor(c.candidate_id);
+  const publicationsVerified = evidence.some((item) =>
+    item.metadata?.identity_verified === true
+    && String(item.metadata?.supports_fields || '').split(',').includes('publications'),
+  );
+  const pubs = publicationsVerified && Array.isArray(c.publications) ? c.publications : [];
 
-  const bioParts: string[] = [];
-  // 身份/角色证据 + 研究方向合并成可读简介
-  const role = c.source_metadata?.mentor_role;
-  if (role) bioParts.push(`${c.mentor_name}，${role}。`);
-  for (const ev of evidence) {
-    if (ev.extracted_fact && ev.source_type?.startsWith('ustc_official_faculty_profile')) {
-      bioParts.push(ev.extracted_fact);
+  // 优先用 RAG 里从官网个人主页抽出的 bio（build_rag.py 的 profile_bio），
+  // 缺失时回退到「身份/角色 + 方向」拼接的兜底简介。
+  let bio: string | undefined;
+  if (c.source_metadata?.profile_bio) {
+    bio = c.source_metadata.profile_bio.trim();
+  } else {
+    const bioParts: string[] = [];
+    const role = c.source_metadata?.mentor_role;
+    if (role) bioParts.push(`${c.mentor_name}，${role}。`);
+    for (const ev of evidence) {
+      if (ev.extracted_fact && ev.source_type?.startsWith('ustc_official_faculty_profile')) {
+        bioParts.push(ev.extracted_fact);
+      }
     }
+    if (topics.length > 0 && !bioParts.some((b) => topics.some((t) => b.includes(t)))) {
+      bioParts.push(`主要研究方向：${topics.join('；')}。`);
+    }
+    bio = bioParts.length > 0 ? bioParts.join('\n') : undefined;
   }
-  if (topics.length > 0 && !bioParts.some((b) => topics.some((t) => b.includes(t)))) {
-    bioParts.push(`主要研究方向：${topics.join('；')}。`);
-  }
-  const bio = bioParts.length > 0 ? bioParts.join('\n') : undefined;
+
+  // contact：优先邮箱（官网抽出的 profile_email），其次主页 URL。
+  const contact = c.source_metadata?.profile_email || c.homepage || undefined;
 
   return {
     id: c.candidate_id,
@@ -183,7 +209,7 @@ export function toAdvisorDetail(c: RagMentor): {
     papers: pubs.length,
     matchScore: 0,
     bio,
-    contact: c.homepage || undefined,
+    contact,
     recruiting: c.recruitment_status || undefined,
     recentPapers: pubs.slice(0, 20).map((title) => ({ title })),
   };
@@ -200,13 +226,17 @@ export function toLightAdvisor(c: RagMentor): {
   papers: number;
   matchScore: number;
 } {
+  const publicationsVerified = store.getEvidenceFor(c.candidate_id).some((item) =>
+    item.metadata?.identity_verified === true
+    && String(item.metadata?.supports_fields || '').split(',').includes('publications'),
+  );
   return {
     id: c.candidate_id,
     name: c.mentor_name,
     title: c.source_metadata?.academic_title ?? '',
     department: c.department ?? '',
-    tags: Array.isArray(c.research_topics) ? c.research_topics : [],
-    papers: Array.isArray(c.publications) ? c.publications.length : 0,
+    tags: cleanTopics(c.research_topics, c.mentor_name),
+    papers: publicationsVerified && Array.isArray(c.publications) ? c.publications.length : 0,
     matchScore: 0,
   };
 }

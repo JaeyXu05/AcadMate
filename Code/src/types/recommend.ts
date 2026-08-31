@@ -14,4 +14,5 @@ export interface RecommendResponse {
   recommendations: Advisor[];
   /** 推荐依据（命中的兴趣/技能关键词，用于页面说明） */
   basedOn: string[];
+  scoreKind?: Advisor['scoreKind'];
 }

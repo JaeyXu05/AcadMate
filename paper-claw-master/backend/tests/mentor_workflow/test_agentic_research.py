@@ -304,9 +304,9 @@ def test_model_driven_research_runs_full_workflow_with_audit():
     )
     assert all(trace.mcp_server is False for trace in state.research_audit.tool_trace)
     assert "api_key" not in state.research_audit.model_dump_json()
-    assert state.candidates[0].research_topics == [
-        "安全强化学习",
-        "机器人学习",
-    ]
-    assert state.match_results[0].dimension_scores.research_topic_match == 92
+    # A name-only paper hit may enrich the audit trail but cannot become an
+    # authoritative mentor direction without entity disambiguation.
+    assert state.candidates == []
+    assert state.match_results == []
     assert state.final_result is not None
+    assert state.final_result.mentors == []
