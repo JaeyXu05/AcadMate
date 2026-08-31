@@ -25,8 +25,8 @@ class FakeAgent:
         yield from self.chunks
 
 
-def message_chunk(content: str):
-    return {"type": "messages", "ns": (), "data": (AIMessage(content=content), {"langgraph_node": "model"})}
+def message_chunk(content: str, *, metadata: dict | None = None, namespace: tuple = ()):
+    return {"type": "messages", "ns": namespace, "data": (AIMessage(content=content), metadata or {"langgraph_node": "model"})}
 
 
 def test_post_agent_message_creates_thread_messages_run_and_events(client, session, monkeypatch):
@@ -43,12 +43,15 @@ def test_post_agent_message_creates_thread_messages_run_and_events(client, sessi
     thread = session.get(Thread, payload["thread_id"])
     assert thread.deepagent_thread_id is not None
     assert run.deepagent_thread_id == thread.deepagent_thread_id
-    assert run.status == RunStatus.running.value
+    # Starlette TestClient waits for BackgroundTasks before returning. The
+    # serialized wire response is still the initial running state, while the
+    # persisted run is already complete.
+    assert run.status == RunStatus.succeeded.value
     assert run.input_json["has_api_key"] is True
     assert "api_key" not in run.input_json
     messages = session.query(Message).filter(Message.thread_id == payload["thread_id"]).order_by(Message.created_at).all()
-    assert [message.role for message in messages] == [MessageRole.user.value]
-    assert [event.event_type for event in run.events] == ["agent_message_received"]
+    assert [message.role for message in messages] == [MessageRole.user.value, MessageRole.assistant.value]
+    assert [event.event_type for event in run.events] == ["agent_message_received", "agent_message_completed"]
 
 
 def test_post_agent_message_stream_returns_ndjson_events(client, session, monkeypatch):
@@ -76,6 +79,23 @@ def test_post_agent_message_stream_returns_ndjson_events(client, session, monkey
     assert fake_agent.calls[0][5] == "v2"
     messages = session.query(Message).filter(Message.thread_id == payloads[-1]["thread_id"]).order_by(Message.created_at).all()
     assert [message.role for message in messages] == [MessageRole.user.value, MessageRole.assistant.value]
+
+
+def test_post_agent_message_stream_keeps_main_agent_tokens_with_lc_agent_name(client, session, monkeypatch):
+    fake_agent = FakeAgent([
+        message_chunk("subagent trace", namespace=("tools:sub",), metadata={"langgraph_node": "model", "lc_agent_name": "paper-discovery-specialist"}),
+        message_chunk("找到了 NEURALBENCH", metadata={"langgraph_node": "model", "lc_agent_name": "paper-claw"}),
+    ])
+    monkeypatch.setattr("backend.agents.runner.create_paper_claw_agent", lambda: fake_agent)
+
+    with client.stream("POST", "/api/agent/messages/stream", json={"message": "检索 NEURALBENCH", "model": "test-model"}) as response:
+        events = [line for line in response.iter_lines() if line]
+
+    payloads = [json.loads(line) for line in events]
+    assert payloads[-1]["type"] == "run_completed"
+    assert payloads[-1]["message"] == "找到了 NEURALBENCH"
+    messages = session.query(Message).filter(Message.thread_id == payloads[-1]["thread_id"]).order_by(Message.created_at).all()
+    assert messages[-1].content_text == "找到了 NEURALBENCH"
 
 
 def test_post_agent_message_stream_stops_persisting_after_cancel(client, session, monkeypatch):
@@ -189,7 +209,7 @@ def test_post_agent_message_reports_missing_chat_model(client, monkeypatch):
     assert payload["status"] == RunStatus.running.value
     run_response = client.get(f"/api/runs/{payload['run_id']}")
     assert run_response.status_code == 200
-    assert run_response.json()["status"] == RunStatus.running.value
+    assert run_response.json()["status"] == RunStatus.failed.value
 
 
 def test_post_agent_message_failure_marks_run_failed(client, session, monkeypatch):
@@ -202,9 +222,9 @@ def test_post_agent_message_failure_marks_run_failed(client, session, monkeypatc
     assert payload["status"] == RunStatus.running.value
     assert payload["error"] is None
     run = session.get(AgentRun, payload["run_id"])
-    assert run.status == RunStatus.running.value
-    assert run.error_message is None
-    assert run.events[-1].event_type == "agent_message_received"
+    assert run.status == RunStatus.failed.value
+    assert "model failed" in (run.error_message or "")
+    assert run.events[-1].event_type == "agent_message_failed"
 
 
 def test_run_events_endpoint_filters_after_sequence(client, session):
@@ -233,7 +253,7 @@ def test_cancel_run_marks_running_run_cancelled(client, session):
 
 
 def test_route_list_does_not_expose_direct_orchestration_endpoints(client):
-    paths = {route.path for route in client.app.routes}
+    paths = {route.path for route in client.app.routes if hasattr(route, "path")}
 
     assert "/api/parse" not in paths
     assert "/api/acquire" not in paths

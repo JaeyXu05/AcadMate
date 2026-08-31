@@ -11,7 +11,7 @@
 
 ## 一句话
 
-学生登录网站 → 输入研究兴趣 → A 多智能体检索从 715 位中科大导师中匹配打分 → 展示卡片 / 详情 / 收藏 / 邮件 / 星图。
+学生登录网站 → 输入研究兴趣 → A 多智能体从当前进仓 **180** 位导师中匹配打分 → 展示卡片 / 详情 / 收藏 / 邮件；3D 星图仍渲染 **715** 节点快照。
 
 ## 四模块分工
 
@@ -33,7 +33,9 @@
 
 ## 核心数据事实（核对磁盘 JSON，非文档）
 
-RAG 库 `paper-claw-master/data/ustc_mentor_rag.json`（generated_at 2026-08-08）：
+> **口径拆分**：当前进仓检索语料 `paper-claw-master/data/ustc_mentor_rag.json` 为 **180 导师 / 358 证据**。下表与 `cloud3d/cloud_data.json` 仍是星图用的 **715 / 1580** 原快照，不要把星图改成 180。
+
+RAG 库历史全量快照（星图 `cloud_data.json` 据此生成，generated_at 以星图文件为准）：
 
 | 项 | 值 |
 |---|---|
@@ -54,14 +56,14 @@ candidate 字段：`candidate_id / mentor_name / affiliation / department / rese
 ## 数据流总览
 
 ```
-[官网/论文平台] --C抓取--> data/ustc_mentor_rag.json (715导师/1580证据)
+[官网/论文平台] --C抓取--> data/ustc_mentor_rag.json (检索 180/358；星图快照仍为 715/1580)
                                     │
         ┌───────────────────────────┼────────────────────────────┐
         ▼                           ▼                            ▼
-   [A] mentor_workflow          [B] build_cloud.py           [D] ragAdvisors.ts
-   retrieve→匹配/评分/邮件/PDF   → cloud_data.json(需重生成)   读RAG→详情/邮件/推荐
-        │                           → /api/cloud/graph            检索经D代理接A
-        └── D /api/agent/chat (SSE) 轮询 A /api/mentor-workflows ──┘
+   [A] mentor_workflow          [B] cloud_data.json(715)     [D] ragAdvisors.ts
+   retrieve→匹配/评分/邮件/PDF   → /api/cloud/graph            读检索语料→详情/邮件/推荐
+        │                           CloudGraph 715 节点        检索经D代理接A
+        └── D /api/agent/chat 先 POST /api/runs，失败再 mentor-workflows ──┘
 ```
 
 四模块通过 `candidate_id` 关联。检索走"前端 SSE → D 代理 → 轮询 A 非流式"链路（见 `Code/AGENTS.md`）。

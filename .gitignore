@@ -35,3 +35,10 @@ __pycache__/
 paper-claw-master/data/*.log
 paper-claw-master/data/*.bak
 paper-claw-master/data/_*
+
+# ===== 本地上传与评估产物 =====
+Code/data/
+Code/generated/
+cloud3d/*.bak*
+paper-claw-master/eval/results/
+*.tsbuildinfo

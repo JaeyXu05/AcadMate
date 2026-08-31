@@ -4,8 +4,11 @@ from collections.abc import Callable
 from datetime import datetime
 import json
 from pathlib import Path
+import ssl
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from langchain.agents.middleware import ModelRequest, ModelResponse, wrap_model_call
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
@@ -15,6 +18,7 @@ from backend.settings import REPO_ROOT
 
 
 _OPENAI_PAYLOAD_LOGGER_INSTALLED = False
+_USTC_LLM_HOST = "api.llm.ustc.edu.cn"
 
 
 def runtime_model(request: ModelRequest):
@@ -34,7 +38,30 @@ def runtime_model(request: ModelRequest):
     }
     if context.extra_body is not None:
         kwargs["extra_body"] = context.extra_body
+    http_client = _http_client_for_base_url(context.base_url, context.timeout)
+    if http_client is not None:
+        kwargs["http_client"] = http_client
     return ChatOpenAI(**kwargs)
+
+
+def _http_client_for_base_url(base_url: str | None, timeout_seconds: int) -> httpx.Client | None:
+    """Use the TLS profile required by the USTC unified LLM gateway.
+
+    The gateway currently closes TLS 1.3 handshakes from the OpenSSL client
+    used by Python, while Windows Schannel and TLS 1.2 work normally. Keep
+    this compatibility path scoped to that endpoint so other OpenAI-compatible
+    providers retain the default client behavior.
+    """
+    if not base_url or urlparse(base_url).hostname != _USTC_LLM_HOST:
+        return None
+    tls_context = ssl.create_default_context()
+    tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    tls_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    return httpx.Client(
+        verify=tls_context,
+        trust_env=False,
+        timeout=timeout_seconds,
+    )
 
 
 def apply_runtime_model(request: ModelRequest) -> None:
@@ -61,9 +88,16 @@ def paper_claw_model_middleware(request: ModelRequest, handler: Callable[[ModelR
 
 def _messages_with_active_paper_info(request: ModelRequest) -> list[Any]:
     context = request.runtime.context
-    if not isinstance(context, PaperClawContext) or not context.active_paper_system_info:
+    if not isinstance(context, PaperClawContext):
         return request.messages
-    injected = SystemMessage(content=context.active_paper_system_info)
+    instructions: list[str] = []
+    if context.active_paper_system_info:
+        instructions.append(context.active_paper_system_info)
+    if context.extra_instructions:
+        instructions.append(context.extra_instructions)
+    if not instructions:
+        return request.messages
+    injected = SystemMessage(content="\n\n".join(instructions))
     messages = list(request.messages)
     for index in range(len(messages) - 1, -1, -1):
         message = messages[index]

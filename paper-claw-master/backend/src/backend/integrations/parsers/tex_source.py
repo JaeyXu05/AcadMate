@@ -1228,9 +1228,9 @@ def _is_layout_artifact(text: str) -> bool:
 
 def _relative_path(path: Path, root: Path) -> str:
     try:
-        return str(path.resolve().relative_to(root.resolve()))
+        return path.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
-        return str(path.resolve())
+        return path.resolve().as_posix()
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

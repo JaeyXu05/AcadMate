@@ -1,18 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Pagination, Spin, Modal } from 'antd';
+import type { LucideIcon } from 'lucide-react';
 import {
-  HistoryOutlined,
-  MailOutlined,
-  FilePdfOutlined,
-  StarOutlined,
-  UserOutlined,
-  BulbOutlined,
-  DeleteOutlined,
-  ArrowLeftOutlined,
-  ExclamationCircleOutlined,
-  ReloadOutlined,
-} from '@ant-design/icons';
+  History,
+  Mail,
+  File,
+  Star,
+  User,
+  Sparkles,
+  Trash2,
+  ArrowLeft,
+  CircleAlert,
+  RotateCw,
+  FileText,
+  CalendarClock,
+  Microscope,
+  Code2,
+  Plug,
+} from 'lucide-react';
 import * as userApi from '../services/user';
 import { useSearchStore } from '../stores/searchStore';
 import type { HistoryItem, SearchHistoryContent, ChatHistoryContent } from '../types/auth';
@@ -21,48 +27,23 @@ import styles from './OtherPage.module.css';
 // ---- 卡片入口配置 ----
 interface EntryCard {
   key: string;
-  icon: React.ReactNode;
+  icon: LucideIcon;
   label: string;
   desc: string;
 }
 
 const CARDS: EntryCard[] = [
-  {
-    key: 'history',
-    icon: <HistoryOutlined />,
-    label: '历史记录',
-    desc: '过往检索与对话记录，点击可恢复',
-  },
-  {
-    key: 'email',
-    icon: <MailOutlined />,
-    label: '邮件模板',
-    desc: '生成联系导师的个性化邮件，一键复制',
-  },
-  {
-    key: 'favorites',
-    icon: <StarOutlined />,
-    label: '我的收藏',
-    desc: '已收藏导师列表，支持对比与取消收藏',
-  },
-  {
-    key: 'pdf',
-    icon: <FilePdfOutlined />,
-    label: 'PDF 分析',
-    desc: '上传论文 PDF，深度分析后推荐导师',
-  },
-  {
-    key: 'profile',
-    icon: <UserOutlined />,
-    label: '个人信息',
-    desc: '年级、专业、兴趣方向与个人简介',
-  },
-  {
-    key: 'recommend',
-    icon: <BulbOutlined />,
-    label: '猜你喜欢',
-    desc: '根据你的偏好智能推荐导师',
-  },
+  { key: 'history', icon: History, label: '历史记录', desc: '过往检索与对话记录，点击可恢复' },
+  { key: 'email', icon: Mail, label: '邮件模板', desc: '生成联系导师的个性化邮件，一键复制' },
+  { key: 'favorites', icon: Star, label: '我的收藏', desc: '已收藏导师列表，支持对比与取消收藏' },
+  { key: 'pdf', icon: File, label: 'PDF 分析', desc: '上传论文 PDF，深度分析后推荐导师' },
+  { key: 'profile', icon: User, label: '个人信息', desc: '年级、专业、兴趣方向与个人简介' },
+  { key: 'recommend', icon: Sparkles, label: '猜你喜欢', desc: '根据你的偏好智能推荐导师' },
+  { key: 'reports', icon: FileText, label: '报告与 PPT', desc: '日报、周报、月报与可选汇报 PPT' },
+  { key: 'research', icon: Microscope, label: '科研工作台', desc: '论文、项目、科研讨论与自定义目标' },
+  { key: 'skills', icon: Code2, label: 'Skill 管理', desc: '自定义科研助手的提示词、工具和权限' },
+  { key: 'integrations', icon: Plug, label: '科研软件连接', desc: '连接 Zotero，同步论文库和笔记' },
+  { key: 'plans', icon: CalendarClock, label: '科研计划', desc: '制定计划并获得 HARNESS 个性化建议与提醒' },
 ];
 
 // ---- 视图模式 ----
@@ -120,6 +101,21 @@ function OtherPage() {
       case 'recommend':
         navigate('/recommend');
         break;
+      case 'reports':
+        navigate('/reports');
+        break;
+      case 'research':
+        navigate('/research');
+        break;
+      case 'skills':
+        navigate('/skills');
+        break;
+      case 'integrations':
+        navigate('/integrations');
+        break;
+      case 'plans':
+        navigate('/plans');
+        break;
       default:
         // 其余未实现卡片暂时占位提示
         Modal.info({
@@ -172,7 +168,7 @@ function OtherPage() {
       cancelText: '取消',
       okButtonProps: { danger: true },
       centered: true,
-      icon: <ExclamationCircleOutlined />,
+      icon: <CircleAlert size={18} strokeWidth={1.5} className="text-slate-600" />,
       onOk: async () => {
         try {
           await userApi.clearHistory();
@@ -225,8 +221,8 @@ function OtherPage() {
   if (view === 'grid') {
     return (
       <div className={styles.container}>
-        <h2 style={{ color: '#fff', margin: 0, fontSize: 22 }}>其他功能</h2>
-        <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: 14, margin: '6px 0 0' }}>
+        <h2 className="m-0 text-[22px] font-medium tracking-tight text-stone-900">其他功能</h2>
+        <p className="mt-1.5 text-[14px] text-stone-500">
           实用工具与个人数据，持续扩充中
         </p>
         <div className={styles.grid}>
@@ -236,7 +232,9 @@ function OtherPage() {
               className={styles.entryCard}
               onClick={() => handleCardClick(card.key)}
             >
-              <span className={styles.entryIcon}>{card.icon}</span>
+              <span className="flex h-7 w-7 items-center justify-center rounded-full border border-slate-300 text-slate-600">
+                <card.icon size={12} strokeWidth={1.5} className="text-slate-600" />
+              </span>
               <span className={styles.entryLabel}>{card.label}</span>
               <span className={styles.entryDesc}>{card.desc}</span>
             </div>
@@ -254,18 +252,18 @@ function OtherPage() {
         <div className={styles.historyHeader}>
           <div className={styles.historyTitle}>
             <button className={styles.backBtn} onClick={handleBack}>
-              <ArrowLeftOutlined />
+              <ArrowLeft size={14} strokeWidth={1.5} className="text-slate-600" />
               返回
             </button>
-            <h2>
-              <HistoryOutlined style={{ marginRight: 8, color: '#667eea' }} />
+            <h2 className="inline-flex items-center gap-2">
+              <History size={16} strokeWidth={1.5} className="text-slate-600" />
               历史记录
             </h2>
           </div>
           {total > 0 && (
             <div className={styles.historyActions}>
               <button className={styles.clearAllBtn} onClick={handleClearAll}>
-                <DeleteOutlined style={{ marginRight: 4 }} />
+                <Trash2 size={14} strokeWidth={1.5} className="text-slate-600" />
                 清空全部
               </button>
             </div>
@@ -279,7 +277,7 @@ function OtherPage() {
           </div>
         ) : items.length === 0 ? (
           <div className={styles.emptyWrap}>
-            <HistoryOutlined style={{ fontSize: 48, color: 'rgba(255,255,255,0.1)' }} />
+            <History size={32} strokeWidth={1.5} className="text-slate-300" />
             <span className={styles.emptyText}>暂无历史记录</span>
             <span className={styles.emptyHint}>使用检索功能后，记录会自动出现在这里</span>
           </div>
@@ -312,9 +310,8 @@ function OtherPage() {
                       handleResume(item);
                     }}
                     title="恢复"
-                    style={{ color: 'rgba(102,126,234,0.8)' }}
                   >
-                    <ReloadOutlined />
+                    <RotateCw size={14} strokeWidth={1.5} className="text-slate-600" />
                   </button>
                   <button
                     className={styles.itemDelete}
@@ -324,7 +321,7 @@ function OtherPage() {
                     }}
                     title="删除"
                   >
-                    <DeleteOutlined />
+                    <Trash2 size={14} strokeWidth={1.5} className="text-slate-600" />
                   </button>
                 </div>
               ))}

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Advisor, ChatMessage, SortBy } from '../types/search';
+import type { Advisor, AgentStage, ChatMessage, RuntimeEvent, SortBy } from '../types/search';
 
 let msgCounter = 0;
 function genId(): string {
@@ -45,13 +45,32 @@ interface SearchState {
   sessionId: string;
   /** 待恢复的检索/对话 query（由历史记录或云图联动写入，ChatWindow 消费后清空） */
   pendingQuery: string | null;
+  /** Harness 建议的下一 Skill（有匹配导师且无阅读记录 → paper_qa） */
+  suggestedNextSkill: string | null;
+  /** 当前 Mentor 工作流 trace_id；澄清续跑必须复用，不能新开一轮 */
+  activeTraceId: string | null;
+  clarificationPending: boolean;
+  lastRunId: string | null;
+  /** Composer / 统一输入附带的 PDF upload_id（消费后清空） */
+  pendingUploadId: string | null;
 
   /** 用户发送消息，同时创建空的 agent 占位消息 */
   addUserMessage: (text: string) => string;
   /** agent 消息逐 chunk 追加内容 */
   appendAgentChunk: (msgId: string, chunk: string) => void;
+  /** 追加一条多智能体阶段（审核失败 / 返工等） */
+  appendAgentStage: (msgId: string, stage: AgentStage) => void;
+  appendAgentEvent: (msgId: string, ev: RuntimeEvent) => void;
+  appendAgentThinking: (msgId: string, step: { agent?: string; text: string }) => void;
+  setPendingUploadId: (id: string | null) => void;
   /** 标记 agent 消息流式完成，可选附带 advisor 结果 */
-  setAgentMessageComplete: (msgId: string, advisors?: Advisor[]) => void;
+  setAgentMessageComplete: (msgId: string, advisors?: Advisor[], responseKind?: 'mentor' | 'chat') => void;
+  setSuggestedNextSkill: (skill: string | null) => void;
+  setWorkflowIdentity: (input: {
+    traceId?: string | null;
+    runId?: string | null;
+    clarificationPending?: boolean;
+  }) => void;
   /** 直接设置搜索结果列表 */
   setSearchResults: (advisors: Advisor[]) => void;
   /** 切换排序方式 */
@@ -72,12 +91,16 @@ export const useSearchStore = create<SearchState>((set, get) => ({
   splitRatio: loadSplitRatio(),
   sessionId: '',
   pendingQuery: null,
+  suggestedNextSkill: null,
+  activeTraceId: null,
+  clarificationPending: false,
+  lastRunId: null,
+  pendingUploadId: null,
 
   addUserMessage: (text) => {
     let sessionId = get().sessionId;
-    // 首次，或上一轮 agent 已结束（!isStreaming）后的新一轮 → 开新会话，
-    // 便于后端按 session 分组、历史只显示每个会话的首条消息。
-    if (!sessionId || !get().isStreaming) {
+    // 同一搜索页对话保持 session/thread；只有清空对话才开新会话，才能续跑澄清。
+    if (!sessionId) {
       sessionId = genSessionId();
     }
     const userMsg: ChatMessage = {
@@ -92,6 +115,9 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       content: '',
       timestamp: Date.now(),
       isStreaming: true,
+      stages: [],
+      events: [],
+      thinking: [],
     };
     set({
       sessionId,
@@ -109,10 +135,52 @@ export const useSearchStore = create<SearchState>((set, get) => ({
     }));
   },
 
-  setAgentMessageComplete: (msgId, advisors) => {
+  appendAgentStage: (msgId, stage) => {
     set((state) => ({
       chatHistory: state.chatHistory.map((m) =>
-        m.id === msgId ? { ...m, isStreaming: false } : m,
+        m.id === msgId
+          ? { ...m, stages: [...(m.stages ?? []), stage] }
+          : m,
+      ),
+    }));
+  },
+
+  appendAgentEvent: (msgId, ev) => {
+    set((state) => ({
+      chatHistory: state.chatHistory.map((m) =>
+        m.id === msgId
+          ? { ...m, events: [...(m.events ?? []), ev] }
+          : m,
+      ),
+    }));
+  },
+
+  appendAgentThinking: (msgId, step) => {
+    set((state) => ({
+      chatHistory: state.chatHistory.map((m) =>
+        m.id === msgId
+          ? { ...m, thinking: [...(m.thinking ?? []), step] }
+          : m,
+      ),
+    }));
+  },
+
+  setPendingUploadId: (id) => set({ pendingUploadId: id }),
+
+  setSuggestedNextSkill: (skill) => set({ suggestedNextSkill: skill }),
+
+  setWorkflowIdentity: ({ traceId, runId, clarificationPending }) =>
+    set((state) => ({
+      activeTraceId: traceId === undefined ? state.activeTraceId : traceId,
+      lastRunId: runId === undefined ? state.lastRunId : runId,
+      clarificationPending:
+        clarificationPending === undefined ? state.clarificationPending : clarificationPending,
+    })),
+
+  setAgentMessageComplete: (msgId, advisors, responseKind) => {
+    set((state) => ({
+      chatHistory: state.chatHistory.map((m) =>
+        m.id === msgId ? { ...m, isStreaming: false, ...(responseKind ? { responseKind } : {}) } : m,
       ),
       searchResults: advisors ?? state.searchResults,
       isStreaming: false,
@@ -137,6 +205,11 @@ export const useSearchStore = create<SearchState>((set, get) => ({
       isStreaming: false,
       sessionId: '',
       pendingQuery: null,
+      suggestedNextSkill: null,
+      activeTraceId: null,
+      clarificationPending: false,
+      lastRunId: null,
+      pendingUploadId: null,
       // 注意：清空对话时不再重置分栏位置，保留用户记住的拖拽比例
     }),
 }));

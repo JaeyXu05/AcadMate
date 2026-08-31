@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Spin, Empty } from 'antd';
-import { BulbOutlined } from '@ant-design/icons';
+import { Sparkles } from 'lucide-react';
 import { getRecommendations } from '../services/recommend';
 import type { Advisor, SortBy } from '../types/search';
 import AdvisorCard from '../components/AdvisorCard';
@@ -42,8 +42,11 @@ function RecommendPage() {
       try {
         const res = await getRecommendations();
         if (!cancelled) {
-          setAdvisors(res.recommendations);
-          setBasedOn(res.basedOn);
+          setAdvisors(res.recommendations.map((item) => ({
+            ...item,
+            scoreKind: item.scoreKind || res.scoreKind || 'interest_overlap',
+          })));
+          setBasedOn((res.basedOn || []).slice(0, 8));
         }
       } catch {
         if (!cancelled) setError(true);
@@ -56,13 +59,16 @@ function RecommendPage() {
     };
   }, []);
 
-  const sorted = useMemo(() => sortAdvisors(advisors, sortBy), [advisors, sortBy]);
+  const sorted = useMemo(
+    () => sortAdvisors(advisors, sortBy),
+    [advisors, sortBy],
+  );
 
   return (
     <div className={styles.container}>
       <PageCloseButton />
       <h2 className={styles.title}>
-        <BulbOutlined style={{ color: '#667eea' }} />
+        <Sparkles size={16} strokeWidth={1.5} className="text-slate-600" />
         猜你喜欢
       </h2>
       <p className={styles.subtitle}>
@@ -76,7 +82,7 @@ function RecommendPage() {
       ) : error ? (
         <div className={styles.emptyState}>
           <Empty
-            description={<span style={{ color: 'rgba(255,255,255,0.45)' }}>加载推荐失败，请稍后重试</span>}
+            description={<span className="text-stone-400">加载推荐失败，请稍后重试</span>}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         </div>
@@ -92,18 +98,18 @@ function RecommendPage() {
             {sorted.length === 0 ? (
               <div className={styles.emptyState}>
                 <Empty
-                  description={
-                    <span style={{ color: 'rgba(255,255,255,0.45)' }}>
-                      暂无推荐，试试在「个人信息」补充兴趣方向
-                    </span>
-                  }
+                  description={<span className="text-stone-400">没有与当前核心画像重叠的导师</span>}
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                 />
               </div>
             ) : (
               <div className={styles.resultsList}>
                 {sorted.map((a) => (
-                  <AdvisorCard key={a.id} advisor={a} />
+                  <AdvisorCard
+                    key={a.id}
+                    advisor={a}
+                    onDislike={(id) => setAdvisors((prev) => prev.filter((item) => item.id !== id))}
+                  />
                 ))}
               </div>
             )}

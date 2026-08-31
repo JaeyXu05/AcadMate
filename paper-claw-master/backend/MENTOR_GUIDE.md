@@ -130,6 +130,13 @@ D 的 `Code/server/routes/agent.ts` 作为代理：`POST /api/mentor-workflows`�
 
 旧 Paper-Claw 链路（`agents/`/`services/`/`tools/` 的 DeepAgents 对话/论文 QA/报告）**未被 mentor_workflow 改动**；mentor_workflow 仅复用其 `AgentRun` 表、`PaperSearchService` 与 chat provider，并新注册 `mentor_workflows` 路由。
 
+## Harness 接入
+
+- `POST /api/runs` 统一接收 `mentor_match` 与 `paper_qa` Skill。Mentor Skill 仍包装 `MentorWorkflowOrchestrator`。
+- Paper Skill 会把导师语料中的论文映射到 Paper catalog，调用原 `submit_agent_message()` 创建真实 `workflow=paper_qa` 的 `AgentRun`，再由原 `execute_agent_run()` 后台运行 Paper Claw 多智能体。
+- `GET /api/runs/{run_id}/harness-result` 使用 `RetrievalService` 读取该论文的 chunk。仅当 AgentRun 为 `succeeded`、检索结果非空、最终回答含真实 `[chunk:<id>]` 引用时返回 `review_status=PASS`；无 chunk 为 `RESEARCH_AGAIN`，未引用为 `REVISE`。
+- Harness 只负责适配、状态路由和审核结果契约，不直接调用模型；论文向量/词法检索仍由 `RetrievalService` 完成。
+
 ## 测试
 
 `backend/tests/mentor_workflow/`：`test_intake_planning` / `test_research_matching_review` / `test_composer` / `test_agentic_research` / `test_runtime_failures` / `test_schemas_state` / `test_ustc_sources` / `test_integration`；`tests/api/test_mentor_workflows_api.py`；`tests/test_mentor_workflow_state_store_db.py`。运行：`uv run pytest`（DB 测试需 pgvector 起）。

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Modal, Form, Input, Checkbox, App } from 'antd';
-import { MailOutlined, LockOutlined } from '@ant-design/icons';
+import { Mail, Lock } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import Button from './Button';
 
@@ -41,7 +41,7 @@ function LoginModal({ open, onClose, onSuccess }: LoginModalProps) {
       centered
       width={400}
     >
-      <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13, marginBottom: 16, textAlign: 'center' }}>
+      <p style={{ color: '#78716c', fontSize: 13, marginBottom: 16, textAlign: 'center' }}>
         首次登录将自动创建账号
       </p>
 
@@ -61,7 +61,8 @@ function LoginModal({ open, onClose, onSuccess }: LoginModalProps) {
           ]}
         >
           <Input
-            prefix={<MailOutlined />}
+            className="input-quiet"
+            prefix={<Mail size={14} strokeWidth={1.5} className="text-slate-600" />}
             placeholder="请输入邮箱"
             size="large"
             autoComplete="email"
@@ -77,7 +78,8 @@ function LoginModal({ open, onClose, onSuccess }: LoginModalProps) {
           ]}
         >
           <Input.Password
-            prefix={<LockOutlined />}
+            className="input-quiet"
+            prefix={<Lock size={14} strokeWidth={1.5} className="text-slate-600" />}
             placeholder="请输入密码（至少 6 位）"
             size="large"
             autoComplete="current-password"

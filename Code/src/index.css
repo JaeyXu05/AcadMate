@@ -1,34 +1,29 @@
-/* ===== 设计令牌（设计系统）=====
-   统一色板/渐变/圆角/阴影/间距，各 CSS module 引用这些变量避免硬编码。
-   如需改品牌色，只改这一处即可全局生效。 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
-  /* 品牌渐变（科研紫蓝 → 靛紫） */
-  --grad-brand: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --color-brand-1: #667eea;
-  --color-brand-2: #764ba2;
-  --color-brand-soft: rgba(102, 126, 234, 0.5);
+  --grad-brand: #1c1917;
+  --color-brand-1: #1c1917;
+  --color-brand-2: #44403c;
+  --color-brand-soft: rgba(28, 25, 23, 0.35);
 
-  /* 背景层级 */
-  --color-bg: #05060f;
-  --color-bg-elev: #0b0d1c;
-  --color-bg-card: rgba(255, 255, 255, 0.04);
-  --color-border: rgba(255, 255, 255, 0.08);
+  --color-bg: #f8fafc;
+  --color-bg-elev: #ffffff;
+  --color-bg-card: #ffffff;
+  --color-border: rgba(28, 25, 23, 0.08);
 
-  /* 文字 */
-  --color-text: #ffffff;
-  --color-text-2: rgba(255, 255, 255, 0.75);
-  --color-text-3: rgba(255, 255, 255, 0.45);
+  --color-text: #1c1917;
+  --color-text-2: #57534e;
+  --color-text-3: #a8a29e;
 
-  /* 圆角 */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
 
-  /* 阴影 */
-  --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.4);
-  --shadow-brand: 0 4px 20px rgba(102, 126, 234, 0.4);
+  --shadow-soft: 0 8px 30px rgba(28, 25, 23, 0.06);
+  --shadow-brand: 0 4px 16px rgba(28, 25, 23, 0.12);
 
-  /* 间距 */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -40,8 +35,6 @@
 *,
 *::before,
 *::after {
-  margin: 0;
-  padding: 0;
   box-sizing: border-box;
 }
 
@@ -54,48 +47,121 @@ body,
 }
 
 body {
-  font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    'Segoe UI',
-    Roboto,
-    'Helvetica Neue',
-    Arial,
-    'Noto Sans SC',
-    sans-serif;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  color: #fff;
+  color: #1e293b;
+  background: #eef2ff;
 }
 
-/* 全局 Modal 暗色风格适配 */
-.ant-modal-content {
-  background-color: #1a1a2e !important;
+.glass-panel {
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(40px);
+  -webkit-backdrop-filter: blur(40px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  box-shadow: 0 20px 25px -5px rgb(224 231 255 / 0.8);
 }
 
-/* Modal 标题与正文文字颜色（暗色背景下保证可读） */
-.ant-modal-content .ant-modal-header {
-  background-color: transparent !important;
-}
-.ant-modal-content .ant-modal-title,
-.ant-modal-confirm-title {
-  color: #fff !important;
-}
-.ant-modal-content .ant-modal-body,
-.ant-modal-confirm-content {
-  color: rgba(255, 255, 255, 0.75) !important;
-}
-
-/* 全局 Card 在暗色背景下的适配 */
-.ant-card {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.06);
+.input-quiet,
+.input-quiet.ant-input,
+.ant-input.input-quiet,
+textarea.input-quiet,
+.ant-input-affix-wrapper.input-quiet,
+.ant-input-outlined.input-quiet {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+  color: #1e293b;
 }
 
-/* 全局暗色滚动条，避免在纯黑背景上出现刺眼的白色滚动条 */
+.input-quiet::placeholder,
+.input-quiet .ant-input::placeholder,
+.search-field textarea::placeholder {
+  color: #94a3b8 !important;
+  line-height: inherit;
+}
+
+.ant-input-affix-wrapper.input-quiet {
+  min-height: 40px;
+  padding: 8px 12px !important;
+  display: flex;
+  align-items: center;
+}
+
+textarea.input-quiet,
+.ant-input-textarea.input-quiet textarea,
+.input-quiet.ant-input-textarea textarea {
+  padding: 10px 12px !important;
+  line-height: 1.5 !important;
+}
+
+.search-field,
+.search-field.ant-input-textarea,
+.ant-input-textarea.search-field {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  min-height: 0 !important;
+}
+
+.search-field textarea,
+.ant-input-textarea.search-field textarea {
+  padding: 10px 0 !important;
+  line-height: 1.5 !important;
+  min-height: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.input-quiet:hover,
+.ant-input-affix-wrapper.input-quiet:hover {
+  border-color: #c7d2fe !important;
+}
+
+.input-quiet:focus,
+.input-quiet.ant-input-focused,
+.ant-input-affix-wrapper-focused.input-quiet,
+.ant-input-outlined.input-quiet:focus {
+  border-color: #a5b4fc !important;
+  box-shadow: 0 0 0 4px #e0e7ff !important;
+  outline: none !important;
+}
+
+.input-quiet .ant-input {
+  background: transparent !important;
+  box-shadow: none !important;
+  color: #1e293b;
+}
+
+.ant-select.input-quiet .ant-select-selector {
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.ant-select-focused.input-quiet .ant-select-selector {
+  border-color: #a5b4fc !important;
+  box-shadow: 0 0 0 4px #e0e7ff !important;
+}
+
+.ant-form-item-label > label {
+  color: #334155 !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+}
+
+.solid-card {
+  background: #fff;
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  box-shadow: 0 10px 30px rgba(28, 25, 23, 0.04);
+}
+
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  scrollbar-color: rgba(28, 25, 23, 0.18) transparent;
 }
 *::-webkit-scrollbar {
   width: 8px;
@@ -105,9 +171,25 @@ body {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.18);
+  background-color: rgba(28, 25, 23, 0.18);
   border-radius: 4px;
 }
-*::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(102, 126, 234, 0.5);
+
+.ant-modal-content {
+  background-color: #fff !important;
+}
+.ant-modal-content .ant-modal-header {
+  background-color: transparent !important;
+}
+.ant-modal-content .ant-modal-title,
+.ant-modal-confirm-title {
+  color: #1c1917 !important;
+}
+.ant-modal-content .ant-modal-body,
+.ant-modal-confirm-content {
+  color: #57534e !important;
+}
+.ant-card {
+  background: #fff;
+  border-color: rgba(28, 25, 23, 0.08);
 }

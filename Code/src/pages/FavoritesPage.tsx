@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, List, Button, Checkbox, App, Spin, Empty } from 'antd';
-import { StarOutlined, DeleteOutlined, SwapOutlined } from '@ant-design/icons';
+import { ArrowLeftRight, Trash2 } from 'lucide-react';
 import * as userApi from '../services/user';
 import { getAdvisorDetail } from '../services/advisor';
 import PageCloseButton from '../components/PageCloseButton';
@@ -95,21 +95,20 @@ function FavoritesPage() {
   }
 
   return (
-    <div style={{ padding: '32px 48px', maxWidth: 1080, margin: '0 auto', flex: 1, overflowY: 'auto', width: '100%' }}>
+      <div style={{ padding: '8px 8px 48px', maxWidth: 1080, margin: '0 auto', flex: 1, overflowY: 'auto', width: '100%', height: '100%', position: 'relative' }}>
       <PageCloseButton />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 12 }}>
-        <h2 style={{ color: '#fff', marginBottom: 0, fontSize: 24, margin: 0 }}>
-          <StarOutlined style={{ marginRight: 10, color: '#667eea' }} />
+        <h2 style={{ color: '#1c1917', marginBottom: 0, fontSize: 22, margin: 0, fontWeight: 500 }}>
           我的收藏
         </h2>
         {entries.length >= MIN_COMPARE && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>
+            <span style={{ color: '#78716c', fontSize: 13 }}>
               已选 {selected.size}/{MAX_COMPARE}
             </span>
             <Button
               type="primary"
-              icon={<SwapOutlined />}
+              icon={<ArrowLeftRight size={14} strokeWidth={1.5} />}
               onClick={handleCompare}
               disabled={selected.size < MIN_COMPARE}
             >
@@ -118,25 +117,25 @@ function FavoritesPage() {
           </div>
         )}
       </div>
-      <p style={{ color: 'rgba(255,255,255,0.45)', fontSize: 14, margin: '6px 0 28px' }}>
+      <p style={{ color: '#78716c', fontSize: 14, margin: '6px 0 28px' }}>
         共 {entries.length} 位导师 · 勾选 {MIN_COMPARE}~{MAX_COMPARE} 位可对比，点击卡片查看详情
       </p>
 
       {entries.length === 0 ? (
         <Card
           style={{
-            background: 'rgba(255,255,255,0.04)',
-            border: '1px solid rgba(255,255,255,0.06)',
+            background: '#fff',
+            border: '1px solid rgba(28,25,23,0.08)',
             textAlign: 'center',
             padding: 48,
           }}
         >
           <Empty
-            description={<span style={{ color: 'rgba(255,255,255,0.45)' }}>还没有收藏任何导师</span>}
+            description={<span style={{ color: '#78716c' }}>还没有收藏任何导师</span>}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
-          <p style={{ color: 'rgba(255,255,255,0.35)', marginTop: 12 }}>
-            在检索页找到感兴趣的导师后，点击 ⭐ 即可收藏
+          <p style={{ color: '#a8a29e', marginTop: 12 }}>
+            在检索页找到感兴趣的导师后，点击收藏即可加入列表
           </p>
         </Card>
       ) : (
@@ -150,12 +149,10 @@ function FavoritesPage() {
             return (
               <List.Item
                 style={{
-                  background: checked ? 'rgba(102,126,234,0.1)' : 'rgba(255,255,255,0.04)',
-                  border: checked ? '1px solid rgba(102,126,234,0.4)' : '1px solid rgba(255,255,255,0.06)',
-                  borderRadius: 10,
+                  background: checked ? '#fafaf9' : '#fff',
+                  border: checked ? '1px solid #1c1917' : '1px solid rgba(28,25,23,0.08)',
                   padding: '20px 24px',
                   marginBottom: 14,
-                  transition: 'background 0.2s, border-color 0.2s',
                   cursor: 'pointer',
                 }}
                 onClick={() => navigate(`/advisor/${encodeURIComponent(item.advisor_id)}`)}
@@ -174,14 +171,14 @@ function FavoritesPage() {
                         style={{
                           width: 44,
                           height: 44,
-                          borderRadius: 10,
-                          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                          borderRadius: 999,
+                          background: '#1c1917',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
                           color: '#fff',
-                          fontSize: 18,
-                          fontWeight: 600,
+                          fontSize: 16,
+                          fontWeight: 500,
                           flexShrink: 0,
                         }}
                       >
@@ -189,17 +186,17 @@ function FavoritesPage() {
                       </div>
                     }
                     title={
-                      <span style={{ color: '#e8e8e8', fontSize: 16, fontWeight: 500 }}>
+                      <span style={{ color: '#1c1917', fontSize: 16, fontWeight: 500 }}>
                         {displayName}
                         {detail?.title && (
-                          <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, fontWeight: 400, marginLeft: 8 }}>
+                          <span style={{ color: '#78716c', fontSize: 13, fontWeight: 400, marginLeft: 8 }}>
                             {detail.title}
                           </span>
                         )}
                       </span>
                     }
                     description={
-                      <span style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13 }}>
+                      <span style={{ color: '#a8a29e', fontSize: 13 }}>
                         {detail ? `${detail.department} · 收藏于 ${item.created_at}` : `收藏于 ${item.created_at}`}
                       </span>
                     }
@@ -207,7 +204,7 @@ function FavoritesPage() {
                   <Button
                     type="text"
                     danger
-                    icon={<DeleteOutlined />}
+                    icon={<Trash2 size={14} strokeWidth={1.5} className="text-slate-600" />}
                     loading={removing === item.advisor_id}
                     onClick={(e) => {
                       e.stopPropagation();

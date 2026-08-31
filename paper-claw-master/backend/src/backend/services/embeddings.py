@@ -7,7 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.db.models import DocumentChunk, ProcessedDocument
-from backend.integrations.embeddings import EmbeddingAdapter, FixtureEmbeddingAdapter, OpenAICompatibleEmbeddingAdapter
+from backend.integrations.embeddings import (
+    EmbeddingAdapter,
+    FastEmbedEmbeddingAdapter,
+    FixtureEmbeddingAdapter,
+    OpenAICompatibleEmbeddingAdapter,
+)
 from backend.schemas import ResolvedProviderConfig
 from backend.services.providers import embedding_provider_from_settings
 
@@ -25,6 +30,7 @@ class EmbeddingService:
             "fixture": FixtureEmbeddingAdapter(),
             "openai_compatible": OpenAICompatibleEmbeddingAdapter(),
             "openai": OpenAICompatibleEmbeddingAdapter(),
+            "local": FastEmbedEmbeddingAdapter(),
         }
 
     def embed_missing_chunks(self, paper_id: int, *, batch_size: int = 64) -> int:

@@ -26,9 +26,10 @@ frontend/dist/
 # Backend
 backend/.venv/
 
-# Runtime data
+# Runtime data (keep the tracked mentor corpus)
 data/*
 !data/.gitkeep
+!data/ustc_mentor_rag.json
 
 # Notebook
 notebooks/

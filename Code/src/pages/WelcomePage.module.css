@@ -3,6 +3,7 @@
   width: 100vw;
   height: 100vh;
   overflow: hidden;
+  background: linear-gradient(to bottom right, #e0e7ff, #faf5ff, #e0f2fe);
 }
 
 .content {
@@ -15,53 +16,34 @@
   align-items: center;
   justify-content: center;
   padding: 0 24px;
-  gap: var(--space-6);
+  gap: 32px;
   text-align: center;
 }
 
-/* ---- 品牌区 ---- */
 .hero {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-4);
-}
-
-.logoBadge {
-  width: 84px;
-  height: 84px;
-  border-radius: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(102, 126, 234, 0.35), rgba(118, 75, 162, 0.25));
-  border: 1px solid rgba(168, 192, 255, 0.25);
-  box-shadow: var(--shadow-brand);
-  margin-bottom: var(--space-2);
+  gap: 12px;
 }
 
 .title {
-  font-size: 44px;
-  font-weight: 700;
-  letter-spacing: 2px;
-  color: var(--color-text);
-  background: linear-gradient(135deg, #e8eeff 0%, #a8c0ff 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  color: #1c1917;
 }
 
 .subtitle {
-  font-size: 16px;
-  color: var(--color-text-3);
-  letter-spacing: 0.5px;
-  max-width: 560px;
+  font-size: 15px;
+  color: #78716c;
+  max-width: 520px;
+  line-height: 1.6;
 }
 
-/* ---- 真实数据统计 ---- */
 .stats {
   display: flex;
-  gap: var(--space-6);
+  gap: 32px;
   align-items: center;
   flex-wrap: wrap;
   justify-content: center;
@@ -72,26 +54,25 @@
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  min-width: 92px;
+  min-width: 88px;
 }
 
 .statValue {
-  font-size: 30px;
-  font-weight: 700;
-  color: #a8c0ff;
+  font-size: 22px;
+  font-weight: 500;
+  color: #1c1917;
 }
 
 .statLabel {
-  font-size: 13px;
-  color: var(--color-text-3);
+  font-size: 12px;
+  color: #a8a29e;
 }
 
-/* ---- 功能速览 ---- */
 .features {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: var(--space-4);
-  max-width: 900px;
+  gap: 16px;
+  max-width: 920px;
   width: 100%;
 }
 
@@ -99,56 +80,38 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-2);
-  background: var(--color-bg-card);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
+  gap: 8px;
+  background: #fff;
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  padding: 20px 18px;
   text-align: left;
-  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
-}
-
-.feature:hover {
-  transform: translateY(-3px);
-  border-color: var(--color-brand-soft);
-  box-shadow: var(--shadow-soft);
 }
 
 .featureIcon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  color: #a8c0ff;
-  background: rgba(102, 126, 234, 0.16);
+  color: #57534e;
 }
 
 .featureTitle {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text);
+  font-size: 15px;
+  font-weight: 500;
+  color: #1c1917;
 }
 
 .featureDesc {
   font-size: 13px;
-  color: var(--color-text-3);
-  line-height: 1.5;
+  color: #78716c;
+  line-height: 1.55;
 }
 
-/* ---- CTA ---- */
 .actions {
   display: flex;
-  gap: var(--space-4);
-  margin-top: var(--space-2);
+  gap: 16px;
 }
 
 .hint {
   font-size: 13px;
-  color: var(--color-text-3);
-  margin-top: -12px;
+  color: #a8a29e;
+  margin-top: -16px;
 }
 
 @media (max-width: 760px) {
@@ -156,10 +119,7 @@
     grid-template-columns: repeat(2, 1fr);
   }
   .title {
-    font-size: 32px;
-  }
-  .stats {
-    gap: var(--space-3);
+    font-size: 26px;
   }
 }
 

@@ -1,22 +1,28 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Tag, Spin, Empty } from 'antd';
-import { MailOutlined } from '@ant-design/icons';
+import { Spin, Empty, App } from 'antd';
+import { Mail, BookOpen } from 'lucide-react';
 import { getAdvisorDetail } from '../services/advisor';
+import { listAgentArtifacts, readMentorPapers, uploadPaperForRetry } from '../services/agent';
 import type { AdvisorDetail } from '../types/advisor';
+import type { PaperReadResult } from '../services/agent';
 import PageCloseButton from '../components/PageCloseButton';
 import StarButton from '../components/StarButton';
 import ReasoningChain from '../components/ReasoningChain';
+import PdfUploader from '../components/PdfUploader';
 import styles from './AdvisorDetailPage.module.css';
-
-const TAG_COLORS = ['#667eea', '#52c41a', '#fa8c16', '#eb2f96', '#13c2c2', '#f5222d'];
 
 function AdvisorDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { message } = App.useApp();
   const [advisor, setAdvisor] = useState<AdvisorDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
+  const [readResult, setReadResult] = useState<PaperReadResult | null>(null);
+  const [readError, setReadError] = useState<string | null>(null);
+  const [evidenceRecords, setEvidenceRecords] = useState<Array<Record<string, unknown>>>([]);
 
   useEffect(() => {
     if (!id) return;
@@ -33,10 +39,50 @@ function AdvisorDetailPage() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
+    listAgentArtifacts({ advisorId: id })
+      .then((rows) => {
+        if (cancelled || !Array.isArray(rows)) return;
+        const paper = rows.find((row: any) => row.skillId === 'paper_qa');
+        if (paper?.payload) setReadResult(paper.payload as PaperReadResult);
+        const mentor = rows.find((row: any) => row.skillId === 'mentor_match');
+        const records = (mentor?.payload as { evidence_records?: unknown })?.evidence_records;
+        if (Array.isArray(records)) setEvidenceRecords(records as Array<Record<string, unknown>>);
+      })
+      .catch(() => {
+        /* 刷新后无产物时保持空 */
+      });
     return () => {
       cancelled = true;
     };
   }, [id]);
+
+  const handleReadPapers = async (paperId?: number) => {
+    if (!advisor || reading) return;
+    setReading(true);
+    setReadError(null);
+    try {
+      const result = await readMentorPapers(advisor.id, { paperId });
+      setReadResult(result);
+      if (result.review_status === 'PASS') {
+        message.success('Paper Claw 阅读通过审核，已写入成长状态');
+      } else if (result.review_status === 'NEED_MORE_INPUT' || result.review_status === 'RESEARCH_AGAIN') {
+        message.warning(result.artifact?.error || '论文尚未解析入库，请在本页上传 PDF 后重试同一 paper_id');
+      } else {
+        message.warning(`论文证据未通过审核：${result.review_status || result.status || 'UNKNOWN'}`);
+      }
+    } catch (err) {
+      const text = err instanceof Error ? err.message : '阅读论文失败';
+      setReadError(text);
+      message.error(text);
+    } finally {
+      setReading(false);
+    }
+  };
+
+  const publicationTitles = (readResult?.artifact?.publications ?? [])
+    .map((item) => (typeof item === 'string' ? item : String((item as { title?: string })?.title ?? '')))
+    .filter(Boolean);
+  const retrievedChunks = readResult?.artifact?.retrieved_chunks ?? [];
 
   if (loading) {
     return (
@@ -55,7 +101,7 @@ function AdvisorDetailPage() {
         <PageCloseButton />
         <div className={styles.errorWrap}>
           <Empty
-            description={<span style={{ color: 'rgba(255,255,255,0.45)' }}>{error ?? '未找到该导师'}</span>}
+            description={<span className="text-stone-400">{error ?? '未找到该导师'}</span>}
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         </div>
@@ -64,7 +110,6 @@ function AdvisorDetailPage() {
   }
 
   const scorePercent = Math.round(advisor.matchScore);
-  const scoreColor = scorePercent >= 80 ? '#52c41a' : scorePercent >= 60 ? '#fa8c16' : '#f5222d';
 
   return (
     <div className={styles.container}>
@@ -85,8 +130,16 @@ function AdvisorDetailPage() {
               className={styles.emailBtn}
               onClick={() => navigate(`/email?advisor_id=${encodeURIComponent(advisor.id)}`)}
             >
-              <MailOutlined />
+              <Mail size={14} strokeWidth={1.5} className="text-slate-600" />
               给这位导师写邮件
+            </button>
+            <button
+              className={styles.readBtn}
+              onClick={() => { void handleReadPapers(); }}
+              disabled={reading}
+            >
+              <BookOpen size={14} strokeWidth={1.5} className="text-slate-600" />
+              {reading ? '阅读中…' : '阅读其论文'}
             </button>
           </div>
         </div>
@@ -95,10 +148,10 @@ function AdvisorDetailPage() {
       {/* 标签 */}
       {advisor.tags.length > 0 && (
         <div className={styles.tagsRow}>
-          {advisor.tags.map((tag, i) => (
-            <Tag key={tag} color={TAG_COLORS[i % TAG_COLORS.length]}>
+          {advisor.tags.slice(0, 8).map((tag) => (
+            <span key={tag} className="border border-stone-200 px-2 py-0.5 text-[11px] text-stone-500">
               {tag}
-            </Tag>
+            </span>
           ))}
         </div>
       )}
@@ -111,9 +164,9 @@ function AdvisorDetailPage() {
             <div className={styles.metricCellValue}>{advisor.papers}</div>
           </div>
           <div className={styles.metricCell}>
-            <div className={styles.metricCellLabel}>匹配度</div>
-            <div className={styles.metricCellValue} style={{ color: scoreColor }}>
-              {scorePercent}%
+            <div className={styles.metricCellLabel}>MATCH SCORE</div>
+            <div className={styles.metricCellValue}>
+              {Number.isFinite(advisor.matchScore) && advisor.matchScore > 0 ? scorePercent : '—'}
             </div>
           </div>
         </div>
@@ -144,6 +197,69 @@ function AdvisorDetailPage() {
               <span style={{ flex: 1 }}>{p.title}</span>
               {p.venue && <span className={styles.paperVenue}>{p.venue}</span>}
               {p.year && <span className={styles.paperYear}>{p.year}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(readError || readResult || evidenceRecords.length > 0) && (
+        <div className={styles.section}>
+          <h3 className={styles.sectionTitle}>Paper Skill 阅读结果</h3>
+          {readResult?.review_status && (
+            <p className={styles.sectionText}>Review：{readResult.review_status}</p>
+          )}
+          {readError && <p className={styles.sectionText}>{readError}</p>}
+          {readResult?.artifact?.note && (
+            <p className={styles.sectionText}>{readResult.artifact.note}</p>
+          )}
+          {readResult?.artifact?.error && (
+            <p className={styles.sectionText}>{readResult.artifact.error}</p>
+          )}
+          {(readResult?.review_status === 'NEED_MORE_INPUT' || readResult?.review_status === 'RESEARCH_AGAIN') && (
+            <div style={{ marginTop: 12 }}>
+              <p className={styles.sectionText}>在此上传 PDF，会写入同一 paper_id 并自动重试 paper_qa，无需新开一轮空转。</p>
+              <PdfUploader
+                uploadFn={async (file) => {
+                  const uploaded = await uploadPaperForRetry({
+                    file,
+                    candidateId: advisor.id,
+                    paperId: readResult?.artifact?.paper_id,
+                    runId: readResult?.run_id,
+                  });
+                  await handleReadPapers(uploaded.paper_id || uploaded.retry?.paper_id);
+                  return { upload_id: String(uploaded.paper_id), filename: file.name };
+                }}
+              />
+            </div>
+          )}
+          {readResult?.artifact?.retry && readResult.review_status === 'REVISE' && (
+            <p className={styles.sectionText}>
+              Retry：答案需要引用并通过词重叠核验的 chunk，而不是重新创建无关运行。
+            </p>
+          )}
+          {publicationTitles.map((title) => (
+            <div key={title} className={styles.paperItem}>
+              <span style={{ flex: 1 }}>{title}</span>
+            </div>
+          ))}
+          {readResult?.artifact?.answer && (
+            <p className={styles.sectionText}>{readResult.artifact.answer}</p>
+          )}
+          {readResult?.evidence_refs && readResult.evidence_refs.length > 0 && (
+            <p className={styles.sectionText}>引用 Evidence：{readResult.evidence_refs.join('、')}</p>
+          )}
+          {retrievedChunks.filter((chunk) => chunk.cited !== false).map((chunk) => (
+            <div key={chunk.evidence_id ?? chunk.chunk_id} className={styles.paperItem}>
+              <span style={{ flex: 1 }}>
+                [{chunk.evidence_id}] {chunk.content}
+              </span>
+            </div>
+          ))}
+          {evidenceRecords.map((record) => (
+            <div key={String(record.evidence_id || '')} className={styles.paperItem}>
+              <span style={{ flex: 1 }}>
+                [{String(record.evidence_id || '')}] {String(record.title || record.extracted_fact || record.source_uri || '')}
+              </span>
             </div>
           ))}
         </div>

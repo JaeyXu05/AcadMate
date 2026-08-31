@@ -57,7 +57,7 @@ function SettingsPage() {
   const themeEntries = Object.entries(PRESET_THEMES);
 
   return (
-    <div className={styles.container}>
+    <div className={`${styles.container} pt-12`}>
       <PageCloseButton />
       {/* 背景颜色主题 */}
       <Card className={styles.card} title="背景颜色主题">
@@ -108,7 +108,7 @@ function SettingsPage() {
       {/* 默认排序方式 */}
       <Card className={styles.card} title="默认排序方式">
         <Radio.Group value={defaultSort} onChange={handleSortChange} size="middle">
-          <Radio.Button value="match">匹配度</Radio.Button>
+          <Radio.Button value="match">研究方向匹配</Radio.Button>
           <Radio.Button value="staffId">工号</Radio.Button>
           <Radio.Button value="papers">论文数</Radio.Button>
         </Radio.Group>

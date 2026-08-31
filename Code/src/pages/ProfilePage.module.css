@@ -1,13 +1,14 @@
 .container {
+  position: relative;
   max-width: 880px;
-  margin: 32px auto;
-  padding: 0 32px 48px;
+  margin: 0 auto;
+  padding: 8px 8px 48px;
   flex: 1;
   overflow-y: auto;
   width: 100%;
+  height: 100%;
 }
 
-/* ===== 头部标识区 ===== */
 .profileHeader {
   display: flex;
   align-items: center;
@@ -16,63 +17,58 @@
 }
 
 .profileAvatar {
-  width: 64px;
-  height: 64px;
-  border-radius: 16px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  background: #1c1917;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  font-size: 28px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 500;
   flex-shrink: 0;
-  box-shadow: 0 4px 16px rgba(102, 126, 234, 0.3);
 }
 
 .profileTitle {
-  font-size: 24px;
-  color: #fff;
+  font-size: 22px;
+  color: #1c1917;
   margin: 0;
+  font-weight: 500;
 }
 
 .profileSubtitle {
-  color: rgba(255, 255, 255, 0.45);
+  color: #78716c;
   font-size: 14px;
   margin-top: 4px;
 }
 
-/* ===== 卡片 ===== */
 .card {
-  background: rgba(255, 255, 255, 0.04) !important;
-  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  background: #fff !important;
+  border: 1px solid rgba(28, 25, 23, 0.08) !important;
   border-radius: 12px !important;
 }
 
 .card :global(.ant-card-head) {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-  min-height: 48px;
-  padding: 0 24px;
+  border-bottom: 1px solid rgba(28, 25, 23, 0.06);
 }
 
 .card :global(.ant-card-head-title) {
-  color: #fff;
+  color: #1e293b;
   font-size: 16px;
+  font-weight: 600;
 }
 
-.card :global(.ant-card-body) {
-  padding: 24px;
+.card :global(.ant-form-item-label > label) {
+  color: #334155 !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
 }
 
-/* 两列布局：基础信息 + 研究兴趣各占一半，在窄屏自动堆叠 */
 .formGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0 24px;
-}
-
-.formGrid :global(.ant-form-item) {
-  margin-bottom: 20px;
 }
 
 .formFull {
@@ -83,4 +79,49 @@
   .formGrid {
     grid-template-columns: 1fr;
   }
+}
+
+.growthHint {
+  color: #78716c;
+  font-size: 13px;
+  margin: 0 0 16px;
+}
+
+.growthBlock {
+  margin-bottom: 18px;
+}
+
+.growthLabel {
+  color: #1c1917;
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.growthTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.growthEmpty {
+  color: #a8a29e;
+  font-size: 13px;
+}
+
+.readItem {
+  margin-bottom: 12px;
+}
+
+.readMentor {
+  color: #44403c;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.readTitle {
+  color: #78716c;
+  font-size: 13px;
+  line-height: 1.5;
+  padding-left: 8px;
 }

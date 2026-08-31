@@ -1,62 +1,72 @@
 import { Router, Response } from 'express';
-import { getDb } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { ragStore, toAdvisorDetail } from '../data/ragAdvisors';
+import { ragStore, type RagMentor } from '../data/ragAdvisors';
+import { loadLatestMentorMatchArtifact } from '../data/runArtifacts';
+import { loadRecommendMemory, studentIdentity, verifiedPaperTitles } from '../data/userMemory';
+import { cleanTopics } from '../data/topicBoilerplate';
+import { agentBase, emailGrowthPatch, probeAgent, runHarnessSkill } from '../harnessClient';
+import {
+  configuredImapUser, drainEmailOutbox, imapConfigured, probeImap, probeSmtp,
+  queueEmail, readInbox, smtpConfigured,
+} from '../services/mailer';
+import { ensureProductivitySchema, getDb } from '../db';
 
 export const emailRouter = Router();
 
 emailRouter.use(authMiddleware);
 
-// ---- 邮件生成（真实 RAG 导师数据）----
-// 按前端契约 { subject, body } 返回，前端零改动。
-// 用模板字符串 + RAG 导师详情 + 当前用户 profile 生成申请意向邮件。
-// （若队友 A 交付 generate_email_template 工具，可替换实现，契约不变。）
-
 interface EmailRequestBody {
   advisor_id?: string;
+  subject?: string;
+  body?: string;
 }
 
-/** 取当前用户 profile（用于邮件自我介绍） */
-function getUserProfile(userId: number) {
-  const db = getDb();
-  return db
-    .prepare('SELECT nickname, grade, major, interests, skills, bio FROM users WHERE id = ?')
-    .get(userId) as
-    | { nickname: string; grade: string; major: string; interests: string; skills: string; bio: string }
-    | undefined;
-}
-
-/** 拼接"年级 + 专业"作为身份前缀，缺失字段优雅省略 */
-function buildIdentity(grade: string, major: string): string {
-  const parts = [grade, major].filter(Boolean);
-  return parts.length > 0 ? parts.join('·') : '';
-}
-
-/** 拼接研究兴趣 + 技能为背景描述，缺失则返回空串 */
-function buildBackground(interests: string[], skills: string[]): string {
-  const lines: string[] = [];
-  if (interests.length > 0) {
-    lines.push(`研究兴趣：${interests.join('、')}`);
+function fillKnownFields(text: string, student: ReturnType<typeof studentIdentity>, papers: string[]): string {
+  let out = String(text || '');
+  if (student.name) out = out.replace(/\[请填写姓名\]/g, student.name);
+  if (student.education) out = out.replace(/\[请填写当前学历\/年级\]/g, student.education);
+  if (papers[0]) {
+    out = out.replace(/\[请从已核验证据中选择论文\]/g, papers[0]);
+  } else {
+    out = out.replace(/注意到公开资料中有《\s*\[请从已核验证据中选择论文\]\s*》。?/g, '');
+    out = out.replace(/\[请从已核验证据中选择论文\]/g, '');
   }
-  if (skills.length > 0) {
-    lines.push(`技能基础：${skills.join('、')}`);
-  }
-  return lines.length > 0 ? '\n' + lines.map((l) => `  · ${l}`).join('\n') : '';
+  return out.replace(/\n{3,}/g, '\n\n').trim();
 }
 
-/** 安全解析 SQLite 中的 JSON 字符串数组字段 */
-function safeParseArray(val: string | undefined | null): string[] {
-  if (!val) return [];
-  try {
-    const parsed = JSON.parse(val);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+function localContactDraft(
+  candidate: RagMentor,
+  student: ReturnType<typeof studentIdentity>,
+  papers: string[],
+  memory: ReturnType<typeof loadRecommendMemory>,
+): { subject: string; body: string } {
+  const direction = memory.core[0] || cleanTopics(candidate.research_topics, candidate.mentor_name)[0] || '相关研究';
+  const who = student.name
+    ? (student.education ? `我是${student.name}，目前为${student.education}。` : `我是${student.name}。`)
+    : (student.education ? `我目前为${student.education}。` : '');
+  const paper = papers[0] ? `注意到公开资料中有《${papers[0]}》。` : '';
+  const lines = [
+    `${candidate.mentor_name}老师您好：`,
+    '',
+    [who, `近期关注到您在${candidate.department || '贵单位'}的「${direction}」方向研究。`, paper].filter(Boolean).join(''),
+    '',
+    '冒昧联系，希望有机会进一步请教。',
+    '',
+    '此致',
+    '敬礼',
+  ];
+  return {
+    subject: `请教${candidate.mentor_name}老师关于${direction}的研究`,
+    body: lines.join('\n'),
+  };
 }
 
-/** POST /api/email/generate — 生成联系导师邮件 */
-emailRouter.post('/generate', (req: AuthRequest, res: Response) => {
+emailRouter.get('/status', async (_req: AuthRequest, res: Response) => {
+  const [smtp, imap] = await Promise.all([probeSmtp(), probeImap()]);
+  res.json({ smtp, imap });
+});
+
+emailRouter.post('/generate', async (req: AuthRequest, res: Response) => {
   const { advisor_id } = (req.body ?? {}) as EmailRequestBody;
   if (!advisor_id) {
     res.status(400).json({ message: '请提供 advisor_id' });
@@ -67,48 +77,92 @@ emailRouter.post('/generate', (req: AuthRequest, res: Response) => {
     res.status(404).json({ message: '未找到该导师' });
     return;
   }
-  const advisor = toAdvisorDetail(candidate);
+  const student = studentIdentity(req.userId!);
+  const papers = verifiedPaperTitles(req.userId!, advisor_id);
+  const memory = loadRecommendMemory(req.userId!);
+  const local = localContactDraft(candidate, student, papers, memory);
+  const matchArtifact = loadLatestMentorMatchArtifact(req.userId!, advisor_id);
+  const resumeTraceId = matchArtifact?.trace_id ? String(matchArtifact.trace_id) : '';
 
-  const user = getUserProfile(req.userId!);
-  const nickname = (user?.nickname || '').trim() || '同学';
-  const grade = (user?.grade || '').trim();
-  const major = (user?.major || '').trim();
-  const interests = safeParseArray(user?.interests);
-  const skills = safeParseArray(user?.skills);
-  const identity = buildIdentity(grade, major);
+  if (agentBase() && await probeAgent(2500)) {
+    try {
+      const result = await runHarnessSkill({
+        userId: req.userId!,
+        skillId: 'email_compose',
+        message: `生成联系 ${candidate.mentor_name} 的邮件`,
+        query: advisor_id,
+        timeoutMs: Math.max(60_000, Number(process.env.EMAIL_AGENT_TIMEOUT_MS || 150_000)),
+        context: {
+          candidate_id: advisor_id,
+          resume_trace_id: resumeTraceId || undefined,
+          student,
+          verified_papers: papers,
+          recommend_memory: memory,
+        },
+        patcher: (runId, payload) => emailGrowthPatch(runId, advisor_id, payload),
+      });
+      const artifact = result?.artifact ?? {};
+      if (result?.review_status === 'PASS' && artifact.subject && artifact.body) {
+        res.json({
+          subject: fillKnownFields(String(artifact.subject), student, papers),
+          body: fillKnownFields(String(artifact.body), student, papers),
+          run_id: result.run_id,
+          review_status: result.review_status,
+          evidence_refs: result.evidence_refs,
+          source: 'harness',
+        });
+        return;
+      }
+    } catch {
+      // 本地草稿使用同一套记忆，不把 Agent 失败伪装成审核通过。
+    }
+  }
 
-  // 主题：申请意向 + 姓名 + 身份
-  const subjectParts = ['研究生申请', nickname];
-  if (identity) subjectParts.push(identity);
-  const subject = subjectParts.join('—');
+  res.json({ ...local, source: 'local' });
+});
 
-  // 代表论文引用（使对导师研究的了解具体、不空泛）
-  const paper = advisor.recentPapers?.[0];
-  const paperRef = paper
-    ? `您近期发表的《${paper.title}》${paper.venue ? `（${paper.venue}${paper.year ? `, ${paper.year}` : ''}）` : ''}`
-    : `您在${advisor.tags.slice(0, 2).join('、')}方向的工作`;
+emailRouter.post('/send', async (req: AuthRequest, res: Response) => {
+  const { advisor_id, subject, body } = (req.body ?? {}) as EmailRequestBody;
+  if (!advisor_id || !String(subject || '').trim() || !String(body || '').trim()) {
+    res.status(400).json({ message: '导师、主题和正文不能为空' });
+    return;
+  }
+  const candidate = ragStore.getById(advisor_id);
+  const recipient = String(candidate?.source_metadata?.profile_email || '').trim();
+  if (!candidate) { res.status(404).json({ message: '未找到该导师' }); return; }
+  if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+    res.status(409).json({ message: '该导师没有经官网资料验证的邮箱，不能自动发送' });
+    return;
+  }
+  ensureProductivitySchema(getDb());
+  const outboxId = queueEmail({
+    userId: req.userId!, recipient,
+    subject: String(subject).replace(/[\r\n]+/g, ' ').trim().slice(0, 300),
+    body: String(body).trim().slice(0, 30000), kind: `advisor-contact:${advisor_id}`,
+  });
+  const delivery = await drainEmailOutbox(1);
+  const row = getDb().prepare('SELECT id,recipient,subject,kind,status,sent_at,error,created_at FROM email_outbox WHERE id=? AND user_id=?').get(outboxId, req.userId!) as { status?: string } | undefined;
+  res.status(row?.status === 'sent' ? 200 : 202).json({ item: row, smtp_configured: delivery.configured });
+});
 
-  // 与导师方向的兴趣交集（若有）
-  const advisorTagSet = new Set(advisor.tags);
-  const overlap = interests.filter((i) => advisorTagSet.has(i));
-  const background = buildBackground(interests, skills);
-  const fitSentence = overlap.length > 0
-    ? `我的研究兴趣中${overlap.join('、')}与您的方向较为契合，`
-    : '';
+emailRouter.get('/outbox', (req: AuthRequest, res: Response) => {
+  ensureProductivitySchema(getDb());
+  const items = getDb().prepare(
+    'SELECT id,recipient,subject,kind,status,scheduled_at,sent_at,error,created_at FROM email_outbox WHERE user_id=? ORDER BY id DESC LIMIT 100',
+  ).all(req.userId!);
+  res.json({ smtp_configured: smtpConfigured(), items });
+});
 
-  const body = `尊敬的${advisor.name}老师：
-
-您好！${identity ? `我是${identity}的${nickname}，` : `我叫${nickname}，`}计划申请研究生，对您在${advisor.tags.slice(0, 2).join('、')}方向的研究非常感兴趣。
-
-我阅读了${paperRef}，对其中${overlap.length > 0 ? `与${overlap.join('、')}相关的` : ''}思路印象深刻，也由此希望能在该方向上继续深入。${fitSentence}若有幸加入您的课题组，我愿意尽快融入并承担具体工作。${background ? `我的相关背景如下：${background}\n` : ''}冒昧打扰，想请教您近期是否有硕士或博士招生名额？附件是我的简历与成绩单，如方便，期待有机会与您进一步交流。
-
-感谢您在百忙之中阅读此信。
-
-此致
-敬礼
-
-${nickname}
-${new Date().toLocaleDateString('zh-CN')}`;
-
-  res.json({ subject, body });
+emailRouter.get('/inbox', async (req: AuthRequest, res: Response) => {
+  const user = getDb().prepare('SELECT email FROM users WHERE id=?').get(req.userId!) as { email: string } | undefined;
+  if (!imapConfigured()) { res.json({ imap_configured: false, items: [] }); return; }
+  if (!user || user.email.trim().toLowerCase() !== configuredImapUser()) {
+    res.status(403).json({ message: '为保护邮箱隐私，只有与 IMAP 配置一致的注册邮箱可以读取收件箱' });
+    return;
+  }
+  try {
+    res.json({ imap_configured: true, items: await readInbox(30) });
+  } catch (error) {
+    res.status(502).json({ message: error instanceof Error ? `读取收件箱失败：${error.message}` : '读取收件箱失败' });
+  }
 });

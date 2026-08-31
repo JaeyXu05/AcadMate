@@ -1,0 +1,212 @@
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #78716c;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  color: #1c1917;
+}
+
+.arrow {
+  width: 12px;
+  font-size: 10px;
+  color: #a8a29e;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: #57534e;
+}
+
+.turnBadge {
+  font-size: 10px;
+  font-weight: 500;
+  color: #94a3b8;
+}
+
+.liveDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #818cf8;
+}
+
+.groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.stageHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #a8a29e;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+}
+
+.stageDot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #d8b4fe;
+}
+
+.stageName {
+  flex: 1;
+}
+
+.stageCount {
+  font-size: 10px;
+  color: #d6d3d1;
+  font-family: ui-monospace, monospace;
+}
+
+.eventList {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
+  border-left: 1px solid rgba(28, 25, 23, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.eventItem {
+  position: relative;
+  display: flex;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.eventDot {
+  position: absolute;
+  left: -14px;
+  top: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d6d3d1;
+}
+
+.eventItem.pass .eventDot {
+  background: #818cf8;
+}
+
+.eventItem.turn .eventDot {
+  background: #d8b4fe;
+}
+
+.eventItem.terminal .eventDot {
+  background: #a8a29e;
+}
+
+.eventBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.eventTitle {
+  color: #44403c;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.eventItem.pass .eventTitle {
+  color: #1c1917;
+}
+
+.eventItem.turn .eventTitle {
+  color: #475569;
+}
+
+.eventMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 10px;
+  color: #a8a29e;
+}
+
+.eventAgent,
+.eventVer,
+.eventTag,
+.eventPass {
+  color: #94a3b8;
+}
+
+.eventAgent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.checkList {
+  list-style: none;
+  margin: 3px 0 0;
+  padding: 0;
+}
+
+.checkItem {
+  display: flex;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #64748b;
+}
+
+.checkDot {
+  flex-shrink: 0;
+}
+
+.reason {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #78716c;
+}
+
+.evidenceRefs {
+  margin-top: 2px;
+  font-size: 10px;
+  color: #a8a29e;
+  font-family: ui-monospace, monospace;
+}
+
+.running {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #a8a29e;
+}
+
+.compact {
+  font-size: 11px;
+}

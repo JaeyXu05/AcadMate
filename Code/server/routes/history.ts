@@ -11,6 +11,8 @@ interface SearchRow {
   query: string;
   results_count: number;
   created_at: string;
+  run_id?: string | null;
+  trace_id?: string | null;
 }
 
 interface ChatFirstRow {
@@ -94,7 +96,12 @@ historyRouter.get('/', (req: AuthRequest, res: Response) => {
   const makeSearchItem = (r: SearchRow): HistoryItem => ({
     id: `search_${r.id}`,
     type: 'search',
-    content: { query: r.query, resultsCount: r.results_count },
+    content: {
+      query: r.query,
+      resultsCount: r.results_count,
+      runId: r.run_id || undefined,
+      traceId: r.trace_id || undefined,
+    },
     created_at: r.created_at,
     _ts: r.created_at,
   });
@@ -110,7 +117,7 @@ historyRouter.get('/', (req: AuthRequest, res: Response) => {
   function fetchSearch(off: number): SearchRow[] {
     return db
       .prepare(
-        `SELECT id, query, results_count, created_at
+        `SELECT id, query, results_count, created_at, run_id, trace_id
          FROM search_history WHERE user_id = ?
          ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
       )
@@ -178,10 +185,12 @@ historyRouter.post('/search', (req: AuthRequest, res: Response) => {
     res.status(400).json({ message: 'query 不能为空' });
     return;
   }
+  const runId = typeof req.body?.run_id === 'string' ? req.body.run_id : null;
+  const traceId = typeof req.body?.trace_id === 'string' ? req.body.trace_id : null;
   const db = getDb();
   const result = db
-    .prepare('INSERT INTO search_history (user_id, query, results_count) VALUES (?, ?, ?)')
-    .run(req.userId!, query, resultsCount);
+    .prepare('INSERT INTO search_history (user_id, query, results_count, run_id, trace_id) VALUES (?, ?, ?, ?, ?)')
+    .run(req.userId!, query, resultsCount, runId, traceId);
   res.json({ id: result.lastInsertRowid });
 });
 

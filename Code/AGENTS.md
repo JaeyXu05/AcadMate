@@ -22,7 +22,8 @@ D 是面向学生的全栈网站：登录、聊天检索导师、看详情/星�
 Code/
 ├── server/
 │   ├── index.ts            # Express 启动 + 路由挂载 + 全局中间件
-│   ├── db.ts               # SQLite 建表/迁移（PRAGMA user_version，SCHEMA_VERSION=1）
+│   ├── db.ts               # SQLite 建表/迁移（PRAGMA user_version，SCHEMA_VERSION=3）
+│   ├── data/growthStore.ts # ★ Review PASS AgentRun 的成长状态写回门禁
 │   ├── data/ragAdvisors.ts # ★ 活数据源：读 RAG JSON 建 byId Map（被多路由复用）
 │   ├── stub/advisors.ts    # ✗ 8 条 mock（带 hIndex），已废弃，无路由引用
 │   ├── middleware/auth.ts  # JWT 校验
@@ -50,7 +51,7 @@ Code/
 
 ## 后端数据库（5 表 + 2 索引）
 
-`server/db.ts` 用 `PRAGMA user_version` 做版本迁移（`SCHEMA_VERSION=1`）；开库即设 `journal_mode=WAL`、`foreign_keys=ON`；DB 文件 `Code/data.db`。
+`server/db.ts` 用 `PRAGMA user_version` 做版本迁移（`SCHEMA_VERSION=3`）；开库即设 `journal_mode=WAL`、`foreign_keys=ON`；DB 文件 `Code/data.db`。
 
 | 表 | 用途 | 关键约束 |
 |---|---|---|
@@ -59,6 +60,7 @@ Code/
 | `user_settings` | 设置 | `user_id UNIQUE NOT NULL`、`FK CASCADE`；4 字段 `bg_theme/bg_color/default_sort/card_density` |
 | `search_history` | 检索历史 | `FK CASCADE`、索引 `idx_search_history_user(user_id, created_at DESC)` |
 | `chat_history` | 对话历史 | `FK CASCADE`、索引 `idx_chat_history_session(user_id, session_id, created_at)` |
+| `growth_state` | 科研成长 | `user_id` PK；导师/方向/论文 + `direction_hypotheses/verified_experiences/artifacts/research_tasks` 七类 JSON 状态；只由 Review PASS AgentRun 服务端写回；`SCHEMA_VERSION=3` |
 
 > **全库无任何 `hIndex` 列。**
 
@@ -68,9 +70,10 @@ Code/
 
 SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 
-- **SSE 事件序列**（每条 `event:<t>\ndata:<JSON>\n\n`，payload 带 `type`）：`thinking`（可多次）→ `result`（`{advisors:Advisor[]}`，只发一次）→ `summary` → `done`（失败时 `error`）。
-- **内部流程**：`POST {A}/api/mentor-workflows`（`{message, execute_immediately:false}`）取 `trace_id` → `POST .../resume` 触发 → 每 `AGENT_POLL`（默认 1200ms）轮询 `GET .../events`（按 `message_id` 去重，命中 `EVENT_HINT` 才发 thinking）+ `GET .../status`（`COMPLETED`/`FAILED` 跳出）→ `GET .../result`。超时 `MENTOR_AGENT_TIMEOUT_MS`（默认 180000ms）。
-- **回退**：`MENTOR_AGENT_BASE_URL` 未配或 A 不可达 → 内联 mock（CV/AI/DEFAULT 三组假数据，id 1~8，**mock 带 hIndex**，但 `mapFinalMentor` 仍置 `hIndex:undefined`）。
+- **SSE 事件序列**（每条 `event:<t>\ndata:<JSON>\n\n`，payload 带 `type`）：`stage` 保留 A 的 `payload/evidence_refs/sender/receiver/timestamp`，并增加 `EVIDENCE_READY` 与成长写回事件；`thinking` 仅保留兼容。`result` 带 `run_id/review_status/evidence_refs`。
+- **内部流程**：先 `POST {A}/api/runs`（`skill_id=mentor_match`）取 `trace_id` 或 `run_id`；失败则回退 `POST {A}/api/mentor-workflows`。再 `POST .../resume` → 轮询 `GET .../events`（去重后同时发 `stage` + `thinking`）+ `GET .../status` → `GET .../result`。
+- **回退**：`MENTOR_AGENT_BASE_URL` 未配或 A 不可达 → **不返回 stub 导师**，SSE `error`。
+- **阅读论文**：`POST /api/agent/read` `{candidate_id, growth}` → A Harness `skill_id=paper_qa` → 创建真实 Paper Claw `AgentRun` 并后台执行。D 轮询 Harness result；只有 run 成功、`RetrievalService` 返回 chunk 且答案按 `[chunk:id]` 引用证据时 Review PASS 并写回成长状态。论文检索仍不污染导师搜索。
 - **★ `mapFinalMentor()` 字段映射**（D 侧缝合关键，真实字段→前端契约）：
 
   | 前端字段 | 来源 | 说明 |
@@ -95,7 +98,7 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 | `POST /api/upload/pdf` + `POST /api/pdf/analyze` | **真实** | 上传真实（multer + `%PDF-` 魔数 + ≤20MB + 30min TTL）；分析用 `unpdf` 抽正文 → summary/keyPoints 由内容生成，`suggestedAdvisors` 用「文档关键词 ↔ RAG research_topics/publications」命中打分（无命中回退论文数前 3） |
 | `GET /api/recommend` | **真实 RAG** | 确定性关键词命中打分（`78+hits*6` 封顶 95；无命中 `55~72` 按 log2(papers)），取前 6 |
 | `GET /api/cloud/graph` | 真实 | 读 `cloud3d/cloud_data.json` → 映射 `CloudNode`（`papers=pub_count`）→ 动态生成同域边（见下） |
-| `/api/favorites` `/api/history` `/api/settings` `/api/user` | 真实 | 收藏/历史/设置/用户（profile GET/PUT、account DELETE 级联删） |
+| `/api/favorites` `/api/history` `/api/settings` `/api/user` | 真实 | 收藏/历史/设置/用户（profile GET/PUT；growth GET 只读，PUT 拒绝客户端直写；account DELETE 级联删） |
 
 ### `GET /api/cloud/graph` —— 云图数据组装
 
@@ -106,7 +109,7 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 
 ## 数据源真相（纠正旧文档把多处标成 [STUB]）
 
-- **`server/stub/advisors.ts`（8 条 mock，带 hIndex）已废弃**——无任何活动路由引用。`agent.ts` 的回退 mock 是内联另写的（CV/AI/DEFAULT 三组）。
+- **`server/stub/advisors.ts`（8 条 mock，带 hIndex）已废弃**——无任何活动路由引用。`agent.ts` **不再**内联 stub 导师。
 - **`server/data/ragAdvisors.ts` 才是活数据源**：读 `paper-claw-master/data/ustc_mentor_rag.json`，按 `candidate_id` 建 `byId` Map。被 `advisors/email/pdf/recommend/index`（健康检查）使用。
 - 因此**导师详情 / 邮件 / 推荐 / 健康检查 / PDF（summary+keyPoints+推荐）均为真实数据**；检索仅在 A 不可达时回退 mock。
 
@@ -116,7 +119,7 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 - **状态**：`authStore`（token 存 localStorage/sessionStorage，7 天）、`searchStore`（聊天历史/结果/排序/分屏比 0.45，localStorage 持久化分屏）、`settingsStore`（4 主题预设 + 自定义色 + 排序 + 密度 + 语言，同步后端）。
 - **展示字段**：界面全用 `papers`（论文数）+ `matchScore`（匹配度），**全程无 hIndex**。`AdvisorCard`/`AdvisorDetailPage`/`ComparePage` 显示论文数+匹配度；`SortSelector` 排序项 = `匹配度/工号/论文数/院系`（无 hIndex 排序）。`Advisor.hIndex?` 在 `types/search.ts` 留可选字段备用，但 `mapFinalMentor`/`toAdvisorDetail`/`toLightAdvisor` 均不赋值；只有废弃的 stub/mock 数据带 hIndex 值。
 - **`CloudGraph.tsx`**（Three.js，591 行）：`InstancedMesh` + 自定义 `ShaderMaterial`（billboard + 呼吸脉动），背景装饰用 `SPIRAL={r_in:170, r_out:540, turns:1.4, arms:6}` 画旋臂星尘/星云/中央亮核（**此 `arms:6` 仅为背景装饰，与 B 的 `build_cloud.py` 节点布局 `N_ARMS=4` 无关**）。节点坐标用 `cloud_data.json` 预计算值，组件不复算。交互：拖拽/缩放/自动缓旋、悬停浮卡、点击选中（按边高亮邻居）。
-- **契约类型**：`Code/src/types/` 定义 `Advisor`/`CloudNode`/`AdvisorDetail` 等；`Code/src/services/` 是预留字段映射位（组件零改动）。`Advisor` 关键字段：`id/name/title/department/tags[]/hIndex?/papers/matchScore/explanation?`。`SseEventType = 'thinking'|'result'|'summary'|'done'|'error'`；`SortBy = 'match'|'staffId'|'papers'|'department'`。
+- **契约类型**：`Code/src/types/` 定义 `Advisor`/`CloudNode`/`AdvisorDetail` 等；`Code/src/services/` 是预留字段映射位（组件零改动）。`Advisor` 关键字段：`id/name/title/department/tags[]/hIndex?/papers/matchScore/explanation?`。`SseEventType = 'thinking'|'result'|'summary'|'done'|'error'|'stage'`；`SortBy = 'match'|'staffId'|'papers'|'department'`。
 
 > 说明：`WelcomePage.tsx` 写死的 stats 文案原为 `1523 结构化证据`，已更正为 `1580`（2026-08-22）。
 
@@ -127,7 +130,7 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 | `JWT_SECRET` | — | ≥16 字符且非默认，启动校验 |
 | `PORT` | 3001 | 后端端口 |
 | `CORS_ORIGINS` | `http://localhost:5173` | |
-| `MENTOR_AGENT_BASE_URL` | （指向 A 的 :8000） | 空/不可达 → 检索回退 stub |
+| `MENTOR_AGENT_BASE_URL` | （指向 A 的 :8000） | 空/不可达 → 检索报错，不回退 stub |
 | `MENTOR_AGENT_TIMEOUT_MS` | 180000 | |
 | `MENTOR_AGENT_POLL_MS` | 1200 | 轮询 A 间隔 |
 

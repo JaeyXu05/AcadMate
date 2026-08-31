@@ -80,11 +80,17 @@ def embedding_provider_from_settings(settings: Settings | None = None) -> Resolv
         "max_context_tokens": settings.embedding_max_context_tokens,
         "tokenizer_encoding": settings.tokenizer_encoding,
     }
+    if settings.embedding_cache_dir is not None:
+        provider_settings["cache_dir"] = str(settings.embedding_cache_dir)
+    if settings.embedding_hf_endpoint is not None:
+        provider_settings["hf_endpoint"] = settings.embedding_hf_endpoint
+    if settings.embedding_hf_disable_xet:
+        provider_settings["hf_disable_xet"] = "1"
     return ResolvedProviderConfig(
         id=0,
         name="settings-embedding",
         kind=ProviderKind.embedding.value,
-        provider=ProviderName.openai_compatible.value,
+        provider=settings.embedding_provider.strip() or ProviderName.openai_compatible.value,
         base_url=settings.embedding_base_url,
         model=settings.embedding_model,
         api_key=settings.embedding_api_key,

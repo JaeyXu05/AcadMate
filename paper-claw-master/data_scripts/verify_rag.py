@@ -301,6 +301,8 @@ _COVERAGE_BOILERPLATE = (
     "著作成果",
     "获奖信息",
     "招生信息",
+    "邮政编码",
+    "手机版",
 )
 
 
@@ -345,6 +347,58 @@ def check_coverage(candidates: list[dict], rep: Report) -> None:
         rep.add("E. 覆盖率门禁", True, detail)
 
 
+def check_retrieval_quality(rag_path: Path, rep: Report) -> None:
+    """可证伪检索门禁：垃圾查询不得入榜；词法命中才算内部召回。"""
+    try:
+        from data_scripts.internal_mentor_rag import FileInternalMentorRag
+        from backend.mentor_workflow.schemas import IntentPacket, MentorGoal
+    except Exception as exc:  # noqa: BLE001
+        rep.add_skip("F. 检索质量", f"无法导入 retrieve: {exc}")
+        return
+
+    rag = FileInternalMentorRag(rag_path)
+    garbage = rag.retrieve(
+        IntentPacket(
+            trace_id="verify-garbage",
+            goal=MentorGoal.find_mentors,
+            research_topics=["不存在的方向xyz"],
+            confidence=1.0,
+        ),
+        [],
+    )
+    vision = rag.retrieve(
+        IntentPacket(
+            trace_id="verify-cv",
+            goal=MentorGoal.find_mentors,
+            research_topics=["计算机视觉", "三维视觉"],
+            confidence=1.0,
+        ),
+        [],
+    )
+    rl = rag.retrieve(
+        IntentPacket(
+            trace_id="verify-rl",
+            goal=MentorGoal.find_mentors,
+            research_topics=["强化学习"],
+            confidence=1.0,
+        ),
+        [],
+    )
+    garbage_n = len(garbage.candidates)
+    vision_hits = [
+        int(c.source_metadata.get("retrieve_hits") or 0) for c in vision.candidates
+    ]
+    rl_hits = [int(c.source_metadata.get("retrieve_hits") or 0) for c in rl.candidates]
+    ok = garbage_n == 0 and (not vision.candidates or max(vision_hits, default=0) >= 1)
+    if rl.candidates and max(rl_hits, default=0) < 1:
+        ok = False
+    detail = (
+        f"垃圾召回 {garbage_n}，视觉 {len(vision.candidates)}，"
+        f"强化学习 {len(rl.candidates)}（hits=0 不得入榜）"
+    )
+    rep.add("F. 检索质量", ok, detail)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="自检 RAG 库")
     parser.add_argument("--rag", type=Path, default=DEFAULT_RAG)
@@ -364,6 +418,7 @@ def main() -> None:
     check_skip_conditions(candidates, evidence, rep)
     check_recall(candidates, evidence, rep, args.rag)
     check_coverage(candidates, rep)
+    check_retrieval_quality(args.rag, rep)
     rep.summary()
 
 

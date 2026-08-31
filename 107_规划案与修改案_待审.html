@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>107 规划案与修改案｜待审</title>
+<style>
+:root{--bg:#f4f6f8;--paper:#fff;--ink:#182234;--muted:#5b6b7c;--line:#d7e0ea;--blue:#2d5f91;--green:#2d7259;--amber:#8a5a16;--red:#8f2d2d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;line-height:1.7}
+.wrap{max-width:1080px;margin:auto;padding:32px 28px 80px}
+header{background:#fff;border-bottom:1px solid var(--line);margin:0 -28px 28px;padding:36px 28px 28px}
+h1{font-size:32px;margin:0 0 8px;letter-spacing:-.03em}
+.lead{margin:0;color:var(--muted);max-width:920px}
+h2{font-size:22px;margin:36px 0 12px;padding-top:8px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:22px 0 8px}
+p{margin:10px 0}
+.note,.warn,.lock{border-left:4px solid var(--blue);background:#eef4fa;padding:12px 14px;border-radius:0 10px 10px 0;margin:14px 0}
+.warn{border-color:var(--amber);background:#fff8ed}
+.lock{border-color:var(--green);background:#eef8f3}
+.bad{border-color:var(--red);background:#fdf2f2}
+pre{background:#111923;color:#dce8f5;padding:14px 16px;border-radius:10px;overflow:auto;font-size:12.5px;line-height:1.65;white-space:pre-wrap}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:12px 0 18px;background:#fff}
+th{text-align:left;background:#eef3f7;color:#2d4866;padding:9px 10px;border:1px solid var(--line)}
+td{vertical-align:top;padding:9px 10px;border:1px solid var(--line)}
+code{font-family:ui-monospace,Consolas,monospace;font-size:.92em;background:#eef2f6;border:1px solid #d9e1e9;border-radius:4px;padding:0 4px}
+.tag{display:inline-block;font-size:11px;font-weight:800;padding:2px 8px;border-radius:999px;background:#e8f0f7;color:#2d5f91}
+.keep{background:#edf1f4;color:#55606b}.add{background:#e8f5ee;color:#286249}.mod{background:#e9f1f9;color:#2d5d8d}.no{background:#fdeeee;color:#8f2d2d}
+ul.checks li{margin:6px 0}
+.footer{margin-top:40px;color:var(--muted);font-size:13px}
+@media print{body{background:#fff}header{margin:0;border:0} .wrap{padding:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<h1>107 规划案与修改案</h1>
+<p class="lead">供队内审阅。通过后按修改案批次开工，不另换赛道。代码根目录：<code>Mentor-matching-platform-107-main/</code>。创意叙事另见 <code>107_完整创意总结.html</code>；本文是可执行合同。</p>
+</header>
+
+<div class="lock"><b>请审的两件事：</b>① 规划案里的产品定义、边界、用户链是否锁定；② 修改案的批次、改哪些文件、验收标准、明确不做是否可以开工。有异议标在对应批次上，不要口头另起一条产品。</div>
+
+<h2>一、规划案（拟锁定）</h2>
+
+<h3>1.1 产品定义</h3>
+<p>产品服务<b>学生的科研成长</b>。导师匹配是现有主入口，必须保留并加强。多智能体是比赛与系统的核心，用来完成链上各阶段工作。Harness 用来组织多个科研 Skill、共享上下文和长期成长状态。GitHub / 黑客松项目只提供可借鉴的组件、交互和工程机制，不能改变服务对象。</p>
+<p>代码调整以<b>增加框架和能力</b>为主：继承 Paper Claw、导师工作流、Evidence、Review、Retry、AgentRun。不能把已有导师平台替换成通用 Agent OS、coding agent 或课程刷题产品。</p>
+
+<div class="note">入口是找导师，主干是学生科研成长，发动机是多智能体，骨架是 Harness，记忆是写回后的成长状态。</div>
+
+<h3>1.2 正确的扩展形态：一条用户链</h3>
+<pre>建立科研画像
+  → 探索方向
+  → 匹配导师          （现有主入口，加强）
+  → 阅读论文与项目    （接入已有 Paper Claw）
+  → 形成研究任务
+  → 调用多智能体完成阶段工作
+  → Evidence / Review / Retry
+  → 把结果写回成长状态
+  → 下一次 Harness 根据新状态重新组织 Skill 和 Agent</pre>
+<p>学生不是在九个工具页之间手动切换。Harness 按当前成长状态决定下一截用哪个 Skill、拉起哪些 Agent。学生可以前进或退回某一截加强，但始终是同一个人、同一份状态。</p>
+<p>「学习」在本规划中只指：沿着科研链补方向、论文、方法、项目里缺的那一块。<b>不做</b>独立的课程出题 / 掌握度 Tutor。</p>
+
+<h3>1.3 各层职责</h3>
+<table>
+<tr><th>层</th><th>职责</th><th>不做什么</th></tr>
+<tr><td>导师平台前端</td><td>学生进门：搜索、详情、对比、星图、邮件、PDF、推荐。全部逐步挂到同一次学生状态 / AgentRun</td><td>不新开第二套网站；不删现有页面</td></tr>
+<tr><td>导师工作流</td><td>匹配导师及后续阶段的多智能体引擎（Intake→Plan→Domain→Research→Matching→Review→Retry→Composer）</td><td>不推倒重写成 LangGraph 主链</td></tr>
+<tr><td>Paper Claw</td><td>阅读论文与项目的多智能体 Skill，接到同一 Harness</td><td>不继续作为互不相干的第二前端</td></tr>
+<tr><td>Evidence / Review / Retry / AgentRun</td><td>整条链的可信层与一次运行对象，不限于找导师</td><td>不被 Harness 替代</td></tr>
+<tr><td>Harness</td><td>Skill 注册与切换、共享上下文、长期状态、按新状态组织下一轮 Agent</td><td>自己不调 LLM、不规划、不做检索</td></tr>
+<tr><td>检索层</td><td>导师 / 论文 / 项目 / 用户经历分库检索，供 Skill 使用</td><td>不做成一个万能向量桶；画像本身不整包 embedding</td></tr>
+</table>
+
+<h3>1.4 检索原则（规划层，必须先于加 Skill）</h3>
+<ul>
+<li>导师库：结构化教师卡 + 证据。稀疏检索可保留，但必须有 top-k 和命中门槛；噪声命中不得让系统跳过官网 / 论文补全。</li>
+<li>论文库：复用已有 chunk / embedding（<code>RetrievalService</code>），供阅读 Skill 引用。</li>
+<li>项目库：学生作品、开源仓库、复现对象；本仓几乎还没有，后期按任务补。</li>
+<li>用户经历：画像是结构化成长状态（能力、证据、时间）。只有笔记、报告、自由文本才进经历检索。</li>
+<li>对外诚实：导师主路径现阶段是「内部语料检索」，不是生成式 RAG。论文问答才是向量 RAG。禁止用 adapter 把坏检索封进所有未来 Skill。</li>
+</ul>
+
+<h3>1.5 多智能体怎么用</h3>
+<p>阶段工作由不同目标、工具、权限的 Agent 完成：Researcher 检索，Reviewer 只读账本，Matcher 不算改证据，Composer 不编造导师。已知路径（内部语料、已固化官网）可以走确定性步骤；不确定、需要对质的阶段才上模型或多智能体并行。默认模型推理保持关闭（<code>PAPER_CLAW_MENTOR_WORKFLOW_MODEL_REASONING_ENABLED=false</code>），保证离线可复现；需要时作为加分开关，不是默认。</p>
+
+<h3>1.6 明确不做（规划边界）</h3>
+<ul>
+<li>不把产品中心从「学生找导师并沿链成长」改成「通用 Research Mission OS」。</li>
+<li>不做课程 Review / 出题 / 掌握度教学系统。</li>
+<li>不新做 Voice Agent、Browser-use 主路径、换掉现有编排器。</li>
+<li>不为每个请求固定堆 5 个聊天人设。</li>
+<li>不把论文 embedding 硬接到导师搜索主链来冒充已经做了 RAG。</li>
+</ul>
+
+<h2>二、现状（修改的理由，已对代码核验）</h2>
+
+<table>
+<tr><th>问题</th><th>代码事实</th><th>对规划的伤害</th></tr>
+<tr><td>导师「RAG」名不副实且无门槛</td><td><code>FileInternalMentorRag.retrieve</code>：TF-IDF + 子串；<code>hits=0</code> 且 <code>score&gt;0</code> 仍入榜；无 top-k</td><td>噪声候选会让 <code>_needs_external_fallback</code> 为 false，官网被短路；Review 看到的是脏名单</td></tr>
+<tr><td>本仓无导师语料文件</td><td><code>paper-claw-master/.gitignore</code> 忽略 <code>data/*</code>；<code>ustc_mentor_rag.json</code> 不在工作区。星图 <code>cloud3d/cloud_data.json</code> 写 715/1580</td><td>详情 / 推荐 / PDF / 工作流检索会空库、503 或静默变成 <code>NullInternalMentorRag</code></td></tr>
+<tr><td>前端压扁多智能体</td><td><code>Code/server/routes/agent.ts</code> 的 <code>EVENT_HINT</code> 把事件变成 thinking 字符串；无 <code>review_failed</code> / retry</td><td>评委和用户看不见核心能力；入口无法「加强」</td></tr>
+<tr><td>A 挂了用假导师</td><td>同文件 <code>runStub</code> + 「王某某」等，带 hIndex</td><td>开源和演示不可信</td></tr>
+<tr><td>无 Harness</td><td>仓库无 <code>harness/</code> 目录</td><td>Paper Claw 与导师流无法共享学生状态</td></tr>
+<tr><td>画像只是账号表单</td><td><code>ProfilePage.tsx</code>：昵称 / 年级 / 专业 / 兴趣 / 技能 / 简介。无 learner/growth</td><td>链的第一环和最后一环（写回）都不存在</td></tr>
+<tr><td>论文 RAG 未接 107 主路径</td><td><code>RetrievalService</code> / <code>retrieve_paper_evidence</code> / <code>create_paper_claw_subagents</code> 存在；<code>Code/</code> 搜索页不调用</td><td>「阅读论文与项目」还是另一套产品</td></tr>
+<tr><td>文档数字与可运行库不一致</td><td>README、WelcomePage 写死 715/1580；兄弟仓曾见 180/358 JSON</td><td>不可复现</td></tr>
+</table>
+
+<div class="warn"><b>语料是开工阻塞项。</b>修改检索代码之前，必须先有一份可进仓库（或明确生成命令）的 <code>ustc_mentor_rag.json</code>。若只有 180 人子集，欢迎页和 README 必须改成真实数字，禁止继续写 715。</div>
+
+<h2>三、修改案（通过后按批次开工）</h2>
+
+<p>原则：已有功能只包装加强，不重写；每批次只改一类变量；前端比赛站继续用 <code>Code/</code>，<code>paper-claw-master/frontend</code> 第一期不改去当比赛主界面。</p>
+
+<h3>批次 0　可运行与诚实 <span class="tag add">先做</span></h3>
+<table>
+<tr><th>动作</th><th>文件</th><th>改法</th></tr>
+<tr><td>放入或生成导师库，并允许被 git 跟踪</td><td><code>paper-claw-master/data/ustc_mentor_rag.json</code><br><code>paper-claw-master/.gitignore</code></td><td>取消对该 JSON 的 ignore（可继续 ignore 其它 data 垃圾）。README 写清 <code>build_rag.py</code> 生成命令</td></tr>
+<tr><td>数字与实现对齐</td><td><code>README.md</code>、<code>WelcomePage.tsx</code>、相关 AGENTS 注释</td><td>导师数 / 证据数改为 JSON 实测，或改为运行时读取，禁止写死过期 715/1580</td></tr>
+<tr><td>补环境样例</td><td>新增 <code>Code/.env.example</code></td><td>列出 <code>MENTOR_AGENT_BASE_URL</code>、<code>JWT</code> 等；不要提交真实密钥</td></tr>
+<tr><td>去掉过期谎言</td><td><code>Code/server/routes/pdf.ts</code> 文件头</td><td>删除已过期的 <code>[STUB]</code> 注释；实现已是 unpdf 抽取</td></tr>
+</table>
+<p><b>验收：</b><code>python data_scripts/verify_rag.py</code> 在本仓能跑；详情页能打开真实 <code>ustc_faculty_*</code>；不再出现「库已构建成功」但文件不存在。</p>
+
+<h3>批次 1　导师检索做成可信层 <span class="tag mod">核心</span></h3>
+<table>
+<tr><th>动作</th><th>文件</th><th>改法</th></tr>
+<tr><td>加 top-k 与命中门槛</td><td><code>data_scripts/internal_mentor_rag.py</code> → <code>FileInternalMentorRag.retrieve</code></td><td>默认 <code>top_k=20</code>。无精确姓名/ID 约束时：<code>hits==0</code> 不得入榜（消灭「不存在的方向xyz 仍召回 6 人」）。返回里带上每个候选的 hits/score，供上层判断</td></tr>
+<tr><td>噪声不得短路官网</td><td><code>mentor_workflow/agents/domain_research.py</code> → <code>_needs_external_fallback</code></td><td>仅「有研究方向 + 身份核验」不够。若检索命中全是 hits=0 的余弦噪声，必须 fallback。低分名单不能视为内部库完整命中</td></tr>
+<tr><td>清洗脏 topic</td><td><code>build_rag.py</code> / 一次数据清洗脚本</td><td>去掉「版权所有 ©2020 中国科学技术大学」一类页脚污染</td></tr>
+<tr><td>检索质量评测</td><td>新增 <code>paper-claw-master/eval/mentor_queries.json</code>，扩展 <code>verify_rag.py</code></td><td>至少含：计算机视觉（应召回相关老师）、强化学习（不应 top1 量子）、无意义查询（召回 0）、中英对照。禁止只用「用导师自己的 topic 反查自己」当唯一测试</td></tr>
+<tr><td>命名诚实</td><td>README、代码注释、<code>ragAdvisors.ts</code> 注释</td><td>导师路径称内部语料检索 / Corpus Retriever；不要再写「真实 RAG 715/1580」</td></tr>
+</table>
+<p><b>验收（同一 JSON、同一 query set，只改检索）：</b></p>
+<ul class="checks">
+<li>无意义查询召回 ≈ 0</li>
+<li>「强化学习」不再因 hits=0 排到无关导师首位</li>
+<li>「计算机视觉」仍能召回相关老师</li>
+<li>噪声命中时 <code>_needs_external_fallback</code> 为 true</li>
+<li>对比表写入 <code>paper-claw-master/eval/results/</code>（改前 / 改后）</li>
+</ul>
+<p><b>本批不做：</b>不上向量库、不改 MatchingAgent 的 8 维公式、不把论文 embedding 接到这条函数。</p>
+
+<h3>批次 2　加强入口：让多智能体被看见 <span class="tag mod">入口</span></h3>
+<table>
+<tr><th>动作</th><th>文件</th><th>改法</th></tr>
+<tr><td>停止 flatten 全部事件</td><td><code>Code/server/routes/agent.ts</code></td><td>SSE 增加结构化 event（保留简短 thinking 作兼容）。必须转发：stage 开始/结束、<code>evidence</code>、<code>review_failed</code> / 非 PASS、<code>retry</code></td></tr>
+<tr><td>搜索页消费真实过程</td><td><code>Code/src/pages/SearchPage.tsx</code> 及现有推理链组件</td><td>右侧或时间轴显示真实 Agent 阶段，而不是编号 thinking。Chat 仍是输入，结果区仍是导师卡</td></tr>
+<tr><td>禁止生产环境假导师</td><td>同 <code>agent.ts</code> 的 <code>runStub</code> / <code>CV_ADVISORS</code></td><td>默认关闭。仅 <code>ALLOW_AGENT_STUB=1</code> 时允许，且卡片必须标明「本地占位，非真实导师」。去掉与真链路不一致的 hIndex</td></tr>
+<tr><td>详情/推荐读同一语料</td><td><code>ragAdvisors.ts</code>、<code>recommend.ts</code></td><td>文件缺失时明确错误，不装成有库。推荐仍可先用关键词，但文案不再称 RAG</td></tr>
+</table>
+<p><b>验收：</b>一次真实检索能看见 Research → Matching → Review；人为或真实的 stale 证据能在 UI 上看到打回而不是一句「检索结果通过复核」。A 未启动时，生产路径失败可见，不出现「王某某」。</p>
+<p><b>本批不做：</b>不重做整站 UI；不把 SearchPage 改成无关的新产品壳到无法搜导师。</p>
+
+<h3>批次 3　加上薄 Harness，接入现有工作流 <span class="tag add">框架</span></h3>
+<table>
+<tr><th>动作</th><th>文件</th><th>改法</th></tr>
+<tr><td>新增 Harness</td><td>新建 <code>paper-claw-master/backend/src/backend/harness/</code><br><code>contracts.py</code> <code>skill_registry.py</code> <code>runtime.py</code> <code>event_adapter.py</code></td><td>统一 Run：skill_id、user_id、input、shared_context。Runtime 只 dispatch，不调 LLM、不做检索</td></tr>
+<tr><td>Mentor Skill 适配器</td><td>新建 <code>.../skills/mentor_match/adapter.py</code></td><td>把统一输入映射成现有 <code>MentorWorkflowRequest</code>，内部仍调 <code>MentorWorkflowOrchestrator</code></td></tr>
+<tr><td>API</td><td>可先让 D 的 <code>/api/agent/chat</code> 改走 Harness；或新增 <code>/api/runs</code> 再让 chat 调用它</td><td>旧 <code>/api/mentor-workflows</code> 第一期不删</td></tr>
+<tr><td>共享上下文 v0</td><td>Harness 的 context 对象</td><td>先放入：用户 profile 字段、本次 query、本次 run_id。成长画像完整结构在批次 5</td></tr>
+</table>
+<p><b>验收：</b>同一 <code>POST /runs</code>（或等价入口）能启动现有导师工作流；结果与现在直接打 mentor-workflows 一致；Runtime 源码中无 chat completion、无 retrieve 调用。</p>
+
+<h3>批次 4　把 Paper Claw 接到同一条链 <span class="tag add">第二 Skill</span></h3>
+<table>
+<tr><th>动作</th><th>文件</th><th>改法</th></tr>
+<tr><td>Reading Skill 适配器</td><td>新建 <code>.../skills/paper_qa/adapter.py</code>（已有 <code>backend/skills/paper_qa/SKILL.md</code>）</td><td>包装现有 <code>agents/runner.py</code> / <code>AgentRun</code> / <code>retrieve_paper_evidence</code></td></tr>
+<tr><td>107 前端入口</td><td><code>PdfPage.tsx</code> 或 Search 结果上的「阅读其论文」</td><td>带着当前学生状态 + 选中导师 / 论文启动 Reading Skill，而不是只做关键词打分推 3 位老师</td></tr>
+<tr><td>检索分库</td><td>不改导师 <code>retrieve()</code></td><td>论文走 <code>RetrievalService</code>；导师走 Corpus Retriever</td></tr>
+</table>
+<p><b>验收：</b>从匹配到的导师能进入读论文阶段，且 Harness context 带上同一 user / 上一 run 的导师 id。论文检索不污染导师榜。</p>
+<p><b>本批不做：</b>不改造 <code>paper-claw-master/frontend</code> 为比赛主 UI。</p>
+
+<h3>批次 5　成长状态写回 <span class="tag add">链的闭合</span></h3>
+<table>
+<tr><th>动作</th><th>文件</th><th>改法</th></tr>
+<tr><td>成长状态 v0</td><td>扩展用户存储（现有 profile API）或新建 growth store</td><td>字段：方向假设、已验证经历（绑 evidence/artifact）、已匹配导师、已读文献、未完成任务。兴趣标签保留，但不再等于「会」</td></tr>
+<tr><td>写回</td><td>Mentor Skill 与 Reading Skill 结束时</td><td>只允许经 Review PASS 的结果写入。Agent 不能直接覆盖画像</td></tr>
+<tr><td>画像页</td><td><code>ProfilePage.tsx</code></td><td>在现有表单下增加只读「科研状态」：来自写回，不手填掌握度</td></tr>
+<tr><td>Harness 再组织</td><td><code>runtime.py</code></td><td>若已有匹配导师且无阅读记录 → 建议 Reading Skill；若 Review 失败 → 重跑同一 Skill。不是弹出九宫格让用户自己猜</td></tr>
+</table>
+<p><b>验收：</b>完成一次匹配后，画像出现该导师与方向证据；再开新 run，Harness 不再从零盲搜全库口径（至少能带上已选导师 / 方向约束）。</p>
+
+<h3>批次 6　补齐链上其余节 <span class="tag add">后段</span></h3>
+<table>
+<tr><th>节</th><th>落点</th><th>最小形态</th></tr>
+<tr><td>探索方向</td><td>匹配之前，复用 Domain Agent 输出</td><td>把领域判断展示为「可能的方向」，写入成长状态，供下一次匹配当约束</td></tr>
+<tr><td>形成研究任务</td><td>匹配 / 阅读之后</td><td>一条带验收标准的阶段任务（读哪几篇、复现什么），先模板化，不自动铸实验</td></tr>
+<tr><td>联系导师</td><td>现有 <code>EmailPage.tsx</code> / <code>email.ts</code></td><td>草稿读取本次 Evidence 与成长状态；发送仍需人批准</td></tr>
+<tr><td>星图</td><td><code>CloudPage</code> / <code>cloud_data.json</code></td><td>高亮本次候选与证据，不改成无关时间机器。无边的静态图可以后补 edges</td></tr>
+</table>
+<p><b>本批仍不做：</b>Counterfactual 仿真器、Forkable Mission 社区、Research Pack SDK 完整化。这些等链跑通再作为开源扩展面，不挡主链。</p>
+
+<h2>四、批次依赖与建议开工顺序</h2>
+<pre>0 语料与诚实数字
+    → 1 导师检索可信     （规划要求：RAG 必须先修）
+        → 2 入口可见多智能体
+            → 3 薄 Harness + Mentor Skill
+                → 4 Paper Skill 接入
+                    → 5 成长状态写回（链闭合）
+                        → 6 方向 / 任务 / 邮件 / 星图挂上同一状态</pre>
+<p>0 和 1 是硬前置。没有可信检索，不要做 3 以后的 Skill 扩展。2 可以与 1 尾部重叠，但事件可见依赖真实工作流仍在跑。</p>
+
+<h2>五、继承与不改动清单</h2>
+<table>
+<tr><th>对象</th><th>处理</th></tr>
+<tr><td><code>MentorWorkflowOrchestrator</code> 及 6 个 Agent 类</td><td><span class="tag keep">KEEP</span> 内部逻辑保留，由 Skill adapter 调用</td></tr>
+<tr><td><code>EvidenceReviewAgent</code> / <code>RetryController</code> / <code>WorkflowState</code> / EventBus</td><td><span class="tag keep">KEEP</span> 可信层，前端改为消费而非压扁</td></tr>
+<tr><td><code>AgentRun</code>（Paper Claw DB 模型）</td><td><span class="tag keep">KEEP</span> Reading Skill 继续用</td></tr>
+<tr><td>搜索 / 详情 / 对比 / 收藏 / 邮件 / PDF / 推荐 / 星图页面</td><td><span class="tag keep">KEEP</span> 不删，逐步共享状态</td></tr>
+<tr><td><code>MatchingAgent</code> 8 维公式</td><td><span class="tag keep">KEEP</span> 批次 1 不改，避免和检索改进混在一起</td></tr>
+<tr><td><code>paper-claw-master/frontend</code></td><td><span class="tag keep">KEEP</span> 第一期不改作比赛主界面</td></tr>
+<tr><td>用户给的 6 份 Downloads 规划 HTML</td><td>不改。以本文 + <code>107_完整创意总结.html</code> 为当前合同</td></tr>
+</table>
+
+<h2>六、需要你拍板的 3 件事</h2>
+<ol>
+<li><b>导师 JSON 用哪一份？</b> 本工作区没有 <code>ustc_mentor_rag.json</code>。请确认：提供 715 全量进仓 / 先用现有 180 人子集并改掉页面数字 / 给出生成脚本与数据源。没有这一项，批次 0 无法完成。</li>
+<li><b>生产环境是否彻底禁止 stub 导师？</b> 修改案默认禁止，仅开发开关可开并打水印。若你希望无后端时页面仍能演示，需要另定「演示夹具」而不是「王某某」假匹配。</li>
+<li><b>第一期闭合点停在哪？</b> 建议审阅通过后连续做完批次 0→5，使「匹配 → 可见多智能体 → 写回画像 → 下次带约束」闭环成立。批次 6 可第二期。若你希望一次做完整条链，在审阅里写明。</li>
+</ol>
+
+<div class="lock"><b>通过方式：</b>回复本文「规划案锁定、修改案按批次 0→5 开工」，并回答上面 3 问。通过后第一件事先做批次 0（语料）和批次 1（检索门槛），不做 UI 大改，也不加新 Skill。</div>
+
+<div class="footer">
+2026-08-22 待审稿。路径均相对 <code>Mentor-matching-platform-107-main/</code>。核验依据当前工作区代码，未改仓库业务文件。
+</div>
+</div>
+</body>
+</html>

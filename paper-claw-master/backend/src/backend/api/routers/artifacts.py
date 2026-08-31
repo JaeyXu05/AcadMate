@@ -4,6 +4,7 @@ import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from backend.api.deps import get_db_session
@@ -12,9 +13,16 @@ from backend.db.models import Artifact, Paper
 from backend.db.repositories import AgentRunRepository
 from backend.db.types import EventLevel, PaperArtifactRole
 from backend.schemas import ArtifactRead
+from backend.services.page_ingest import ingest_page_texts
 from backend.services.storage import ArtifactStorageService
 
 router = APIRouter(tags=["artifacts"])
+
+
+class PageIngestRequest(BaseModel):
+    pages: list[dict] = Field(default_factory=list)
+    run_id: int | None = None
+    artifact_id: int | None = None
 
 
 @router.post("/papers/{paper_id}/artifacts/upload", response_model=ArtifactRead)
@@ -49,6 +57,36 @@ def upload_paper_artifact(
             payload_json={"paper_id": paper_id, "artifact_id": artifact.id, "role": role},
         )
     return artifact_read(artifact)
+
+
+@router.post("/papers/{paper_id}/page-ingest")
+def ingest_paper_pages(
+    paper_id: int,
+    request: PageIngestRequest,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    if session.get(Paper, paper_id) is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    try:
+        result = ingest_page_texts(
+            session,
+            paper_id,
+            request.pages,
+            run_id=request.run_id,
+            artifact_id=request.artifact_id,
+        )
+        session.commit()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        from backend.services.embeddings import EmbeddingService
+
+        EmbeddingService(session).embed_missing_chunks(paper_id)
+        session.commit()
+        result["embedded"] = True
+    except Exception:
+        result["embedded"] = False
+    return result
 
 
 @router.get("/artifacts/{artifact_id}", response_model=ArtifactRead)

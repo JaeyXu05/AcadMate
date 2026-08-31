@@ -105,6 +105,31 @@ def test_lexical_fallback_without_embeddings(session):
     assert results[0].retrieval_mode == "lexical"
 
 
+def test_lexical_fallback_matches_chinese_query(session):
+    paper = Paper(title="中文论文")
+    session.add(paper)
+    session.flush()
+    repo = ParsingRepository(session)
+    job = repo.create_parse_job(paper.id, status="succeeded", strategy="fixture")
+    parsed = repo.create_parsed_document(paper.id, job.id, "fixture", plain_text="text", markdown_content="text")
+    processed = repo.create_processed_document(
+        paper.id,
+        parsed.id,
+        job.id,
+        status=ProcessedDocumentStatus.ready.value,
+        content_text="text",
+        content_markdown="text",
+    )
+    repo.add_chunk(processed.id, "cjk", 1, "本文研究计算机视觉中的目标检测", role=SectionRole.body.value)
+    repo.add_chunk(processed.id, "other", 2, "unrelated english bibliography", role=SectionRole.body.value)
+    session.commit()
+
+    results = RetrievalService(session).retrieve(paper.id, "计算机视觉 目标检测", limit=1)
+
+    assert results[0].metadata["chunk_key"] == "cjk"
+    assert results[0].retrieval_mode == "lexical"
+
+
 def test_embedding_dimension_from_provider_settings(session):
     paper, chunks = create_processed_chunks(session)
 

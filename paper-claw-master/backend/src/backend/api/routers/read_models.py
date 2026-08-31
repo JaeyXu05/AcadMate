@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -9,6 +9,9 @@ from backend.api.deps import get_db_session
 from backend.api.serializers import memory_read, paper_detail, paper_summary, report_read, report_summary, run_read, search_session_read, thread_detail, thread_summary
 from backend.db.models import AgentRun, Paper, PaperArtifact, Report, SearchSession, Thread
 from backend.db.repositories import MemoryRepository, ThreadRepository
+from backend.db.types import PaperSource
+from backend.integrations.paper_sources import paper_source_adapters_from_settings
+from backend.services.search import PaperSearchService
 from backend.schemas import MemoryRead, PaperDetail, PaperSummary, ReportRead, ReportSummary, RunRead, RuntimeSettingsRead, SearchSessionRead, ThreadDetail, ThreadSummary
 from backend.settings import get_settings
 
@@ -16,14 +19,28 @@ router = APIRouter(tags=["read-models"])
 
 
 @router.get("/threads", response_model=list[ThreadSummary])
-def list_threads(include_archived: bool = Query(False), session: Session = Depends(get_db_session)) -> list[ThreadSummary]:
+def list_threads(
+    include_archived: bool = Query(False),
+    owner: str | None = Header(default=None, alias="X-PaperClaw-Owner"),
+    session: Session = Depends(get_db_session),
+) -> list[ThreadSummary]:
     threads = ThreadRepository(session).list(include_archived=include_archived)
+    if owner:
+        threads = [thread for thread in threads if _thread_owned_by(thread, owner)]
     return [thread_summary(thread) for thread in threads]
 
 
 @router.post("/threads/{thread_id}/archive", response_model=ThreadSummary)
-def archive_thread(thread_id: int, session: Session = Depends(get_db_session)) -> ThreadSummary:
-    thread = ThreadRepository(session).archive(thread_id)
+def archive_thread(
+    thread_id: int,
+    owner: str | None = Header(default=None, alias="X-PaperClaw-Owner"),
+    session: Session = Depends(get_db_session),
+) -> ThreadSummary:
+    repository = ThreadRepository(session)
+    current = repository.get(thread_id)
+    if current is None or (owner and not _thread_owned_by(current, owner)):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    thread = repository.archive(thread_id)
     if thread is None:
         raise HTTPException(status_code=404, detail="Thread not found")
     session.commit()
@@ -31,17 +48,26 @@ def archive_thread(thread_id: int, session: Session = Depends(get_db_session)) -
 
 
 @router.get("/threads/{thread_id}", response_model=ThreadDetail)
-def get_thread(thread_id: int, session: Session = Depends(get_db_session)) -> ThreadDetail:
+def get_thread(
+    thread_id: int,
+    owner: str | None = Header(default=None, alias="X-PaperClaw-Owner"),
+    session: Session = Depends(get_db_session),
+) -> ThreadDetail:
     thread = session.scalar(
         select(Thread)
         .where(Thread.id == thread_id)
         .options(selectinload(Thread.messages), selectinload(Thread.agent_runs).selectinload(AgentRun.events))
     )
-    if thread is None:
+    if thread is None or (owner and not _thread_owned_by(thread, owner)):
         raise HTTPException(status_code=404, detail="Thread not found")
     for run in thread.agent_runs:
         mark_stale_running_run_failed(session, run)
     return thread_detail(thread)
+
+
+def _thread_owned_by(thread: Thread, owner: str) -> bool:
+    metadata = thread.metadata_json or {}
+    return str(metadata.get("owner_key") or "") == owner.strip()
 
 
 @router.get("/runs/{run_id}", response_model=RunRead)
@@ -114,6 +140,80 @@ def get_runtime_settings() -> RuntimeSettingsRead:
 def list_papers(session: Session = Depends(get_db_session)) -> list[PaperSummary]:
     papers = session.scalars(select(Paper).order_by(Paper.updated_at.desc())).all()
     return [paper_summary(paper) for paper in papers]
+
+
+@router.get("/papers/search")
+def search_paper_catalog(
+    query: str = Query(..., min_length=1, max_length=500),
+    source: str = Query(PaperSource.local.value),
+    mode: str = Query("auto"),
+    limit: int = Query(8, ge=1, le=20),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """Small read-model facade for the Research workspace.
+
+    The agent remains the orchestrator for conversational paper work.  This
+    endpoint only exposes the existing, explainable search-session contract so
+    the UI can show candidates and require an explicit selection.
+    """
+    if source not in {PaperSource.local.value, PaperSource.arxiv.value, PaperSource.openalex.value}:
+        raise HTTPException(status_code=400, detail="Unsupported paper source")
+    execution = PaperSearchService(session, paper_source_adapters_from_settings()).search(
+        query.strip(), source=source, mode=mode, max_results=limit,
+    )
+    candidates = []
+    for candidate in execution.search_session.candidates:
+        raw = dict(candidate.raw_json or {})
+        candidates.append({
+            "id": candidate.id,
+            "rank": candidate.rank,
+            "source": candidate.source,
+            "paper_id": candidate.paper_id,
+            "title": candidate.title,
+            "abstract": candidate.abstract,
+            "authors": list(candidate.authors_json or []),
+            "year": candidate.year,
+            "venue": raw.get("venue"),
+            "doi": candidate.doi,
+            "arxiv_id": candidate.arxiv_id,
+            "openalex_id": candidate.openalex_id,
+            "landing_page_url": candidate.landing_page_url,
+            "pdf_url": candidate.pdf_url,
+            "score": candidate.score,
+            "match_reasons": raw.get("match_reasons") or raw.get("match_reason") or [],
+        })
+    return {
+        "search_session_id": execution.search_session.id,
+        "source": execution.source,
+        "mode": execution.mode,
+        "query": execution.query,
+        "query_used": execution.query_used,
+        "status": execution.search_session.status,
+        "warnings": execution.warnings,
+        "candidates": candidates,
+    }
+
+
+@router.post("/papers/search/{search_session_id}/confirm")
+def confirm_paper_catalog_candidate(
+    search_session_id: int,
+    candidate_id: int = Query(..., gt=0),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    try:
+        search_session = PaperSearchService(session).confirm_candidate(
+            search_session_id, candidate_id, update_thread_focus=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    selected = session.get(Paper, search_session.selected_candidate.paper_id) if search_session.selected_candidate and search_session.selected_candidate.paper_id else None
+    return {
+        "search_session_id": search_session.id,
+        "status": search_session.status,
+        "selected_candidate_id": search_session.selected_candidate_id,
+        "paper_id": selected.id if selected is not None else None,
+        "title": selected.title if selected is not None else None,
+    }
 
 
 @router.get("/papers/{paper_id}", response_model=PaperDetail)

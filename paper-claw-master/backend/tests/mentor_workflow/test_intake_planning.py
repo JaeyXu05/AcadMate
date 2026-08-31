@@ -25,7 +25,7 @@ from backend.mentor_workflow.schemas import (
                 message="帮我找做多智能体强化学习的导师",
                 research_topics=["multi-agent reinforcement learning"],
             ),
-            "multi-agent reinforcement learning",
+            "多智能体强化学习",
             [],
         ),
         (MentorWorkflowRequest(message="帮我找导师"), None, ["research_topics"]),
@@ -35,7 +35,7 @@ from backend.mentor_workflow.schemas import (
                 research_topics=["reinforcement learning"],
                 methods=["policy gradient"],
             ),
-            "reinforcement learning",
+            "强化学习",
             [],
         ),
         (
@@ -70,6 +70,17 @@ from backend.mentor_workflow.schemas import (
             "graph learning",
             [],
         ),
+        (MentorWorkflowRequest(message="计算机视觉"), "计算机视觉", []),
+        (MentorWorkflowRequest(message="推荐系统"), "推荐系统", []),
+        (MentorWorkflowRequest(message="找计算机视觉导师"), "计算机视觉", []),
+        (MentorWorkflowRequest(message="computer vision"), "computer vision", []),
+        (
+            MentorWorkflowRequest(
+                message="我想找计算机视觉方向的博导，关注目标检测和三维重建"
+            ),
+            "计算机视觉",
+            [],
+        ),
     ],
 )
 def test_input_understanding_handles_supported_inputs(
@@ -86,6 +97,21 @@ def test_input_understanding_handles_supported_inputs(
     )
     assert intent.missing_fields == expected_missing
     assert (clarification is not None) == bool(expected_missing)
+
+
+def test_current_message_topics_are_not_merged_with_historical_research_topics():
+    request = MentorWorkflowRequest(
+        message="推荐系统",
+        research_topics=["几何拓扑", "动力系统", "邮政编码：230026", "具身智能"],
+    )
+    intent, clarification = InputUnderstandingAgent().run(
+        request, new_workflow_state(request, trace_id="trace-current-intent")
+    )
+
+    assert intent.research_topics == ["推荐系统"]
+    assert clarification is None
+    assert "几何拓扑" not in intent.research_topics
+    assert "邮政编码：230026" not in intent.research_topics
 
 
 def test_input_understanding_requires_candidate_for_compare():

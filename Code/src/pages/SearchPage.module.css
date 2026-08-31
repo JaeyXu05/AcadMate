@@ -1,52 +1,85 @@
 .container {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  overflow: hidden;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
 }
 
-/* ===== Left Panel ===== */
-.leftPanel {
+.regionHeader {
+  flex-shrink: 0;
   display: flex;
-  flex-direction: column;
-  flex: 1;
-  overflow: hidden;
-  min-height: 0;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
 }
 
-.resultsArea {
+.regionActions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.workspaceBody {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  min-height: 0;
+  padding-right: 4px;
+}
+
+.chatStrip {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0 16px;
+  border-bottom: 1px solid rgba(28, 25, 23, 0.06);
+  margin-bottom: 16px;
 }
 
 .resultsList {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px 20px 24px;
+  padding: 4px 0 24px;
 }
 
-/* ===== Empty / Loading States ===== */
 .emptyState {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 100%;
-  padding-bottom: 40px;
+  min-height: 200px;
+  padding: 20px;
 }
 
 .loadingState {
-  padding: 16px 20px;
+  padding: 8px 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
 .skeletonCard {
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 10px;
+  background: #fff;
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  border-radius: 12px;
   padding: 20px;
+}
+
+.nextSkillBanner {
+  margin: 0 0 16px;
+}
+
+.liveTimeline {
+  margin: 4px 0 0;
+  padding: 12px 0;
+}
+
+.liveTimelineTitle {
+  font-size: 12px;
+  color: #a8a29e;
+  margin-bottom: 8px;
+  letter-spacing: 0.08em;
 }

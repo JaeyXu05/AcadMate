@@ -2,13 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, Dropdown, App } from 'antd';
 import type { MenuProps } from 'antd';
-import {
-  UserOutlined,
-  StarOutlined,
-  SettingOutlined,
-  LogoutOutlined,
-  DeleteOutlined,
-} from '@ant-design/icons';
+import { User, Star, Settings, LogOut, Trash2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { deleteAccount } from '../services/user';
 
@@ -17,7 +11,6 @@ function UserAvatarDropdown() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const { modal } = App.useApp();
-  // 受控展开状态：点击菜单项后主动收起，避免停留在打开状态
   const [open, setOpen] = useState(false);
 
   const email = user?.email || '';
@@ -49,7 +42,7 @@ function UserAvatarDropdown() {
         try {
           await deleteAccount();
         } catch {
-          // 即使后端调用失败，也允许本地登出，避免账号卡死
+          /* 即使后端调用失败，也允许本地登出 */
         }
         logout();
         navigate('/welcome', { replace: true });
@@ -60,32 +53,32 @@ function UserAvatarDropdown() {
   const menuItems: MenuProps['items'] = [
     {
       key: 'profile',
-      icon: <UserOutlined />,
+      icon: <User size={14} strokeWidth={1.5} className="text-slate-600" />,
       label: '个人信息',
       onClick: () => navigate('/profile'),
     },
     {
       key: 'favorites',
-      icon: <StarOutlined />,
+      icon: <Star size={14} strokeWidth={1.5} className="text-slate-600" />,
       label: '收藏夹',
       onClick: () => navigate('/favorites'),
     },
     {
       key: 'settings',
-      icon: <SettingOutlined />,
+      icon: <Settings size={14} strokeWidth={1.5} className="text-slate-600" />,
       label: '设置',
       onClick: () => navigate('/settings'),
     },
     { type: 'divider' },
     {
       key: 'logout',
-      icon: <LogoutOutlined />,
+      icon: <LogOut size={14} strokeWidth={1.5} className="text-slate-600" />,
       label: '退出登录',
       onClick: handleLogout,
     },
     {
       key: 'deleteAccount',
-      icon: <DeleteOutlined />,
+      icon: <Trash2 size={14} strokeWidth={1.5} className="text-slate-600" />,
       label: '注销账号',
       danger: true,
       onClick: handleDeleteAccount,
@@ -96,10 +89,9 @@ function UserAvatarDropdown() {
     <Dropdown
       menu={{
         items: menuItems,
-        // 受控模式下，点击任意菜单项后主动收起下拉
         onClick: () => setOpen(false),
       }}
-      placement="bottomRight"
+      placement="topLeft"
       trigger={['click']}
       open={open}
       onOpenChange={setOpen}
@@ -107,7 +99,8 @@ function UserAvatarDropdown() {
       <Avatar
         size={36}
         style={{
-          backgroundColor: '#667eea',
+          backgroundColor: '#f1f5f9',
+          color: '#64748b',
           cursor: 'pointer',
           flexShrink: 0,
         }}

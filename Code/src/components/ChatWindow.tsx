@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Input, Button, App } from 'antd';
-import { SendOutlined, PlusOutlined } from '@ant-design/icons';
+import { Send, Plus } from 'lucide-react';
 import { useSearchStore } from '../stores/searchStore';
 import ChatBubble from './ChatBubble';
 import styles from './ChatWindow.module.css';
@@ -69,7 +69,7 @@ function ChatWindow() {
             disabled={isStreaming}
             title="开始新对话"
           >
-            <PlusOutlined />
+            <Plus size={14} strokeWidth={1.5} className="text-slate-600" />
             新对话
           </button>
         )}
@@ -78,7 +78,7 @@ function ChatWindow() {
       <div className={styles.chatBody}>
         {chatHistory.length === 0 ? (
           <div className={styles.chatEmpty}>
-            <div className={styles.chatEmptyIcon}>💬</div>
+            <div className={styles.chatEmptyIcon} />
             <div className={styles.chatEmptyText}>
               描述你想找的导师方向，我来为你推荐
             </div>
@@ -104,11 +104,12 @@ function ChatWindow() {
           placeholder="描述你想找的导师方向…"
           autoSize={{ minRows: 6, maxRows: 12 }}
           disabled={isStreaming}
+          className="input-quiet"
           style={{ resize: 'none', fontSize: 18, padding: '14px 16px' }}
         />
         <Button
           type="primary"
-          icon={<SendOutlined />}
+          icon={<Send size={14} strokeWidth={1.5} className="text-slate-600" />}
           onClick={handleSend}
           loading={isStreaming}
           disabled={!inputValue.trim() || isStreaming}

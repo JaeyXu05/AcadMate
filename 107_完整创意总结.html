@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>学生科研成长系统｜完整创意</title>
+<style>
+:root{
+  --bg:#07090d;--panel:#0f151d;--line:#24323d;
+  --text:#eef6fb;--muted:#9eafbc;--cyan:#55e5ff;--violet:#b896ff;
+  --lime:#a9efb2;--gold:#f3d373;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:
+  radial-gradient(900px 620px at 85% -10%,rgba(85,229,255,.10),transparent 60%),
+  radial-gradient(850px 620px at -10% 38%,rgba(184,150,255,.08),transparent 60%),
+  var(--bg);
+  color:var(--text);
+  font-family:Inter,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  line-height:1.85;
+}
+.wrap{width:min(980px,calc(100% - 40px));margin:auto}
+.hero{padding:84px 0 56px;border-bottom:1px solid var(--line)}
+.eyebrow{font-size:13px;letter-spacing:.18em;color:var(--cyan);font-weight:800}
+h1{font-size:clamp(36px,5.4vw,62px);line-height:1.12;letter-spacing:-.04em;margin:16px 0 22px}
+h1 span{color:#8da0ae;font-weight:600}
+.lead{font-size:20px;line-height:1.78;color:#c9d6de}
+section{padding:64px 0;border-bottom:1px solid rgba(36,50,61,.78)}
+.sec{font-family:ui-monospace,monospace;color:var(--cyan);font-weight:800;font-size:12px;letter-spacing:.14em}
+h2{font-size:32px;line-height:1.22;margin:8px 0 22px;letter-spacing:-.03em}
+h3{font-size:22px;margin:32px 0 10px}
+p{color:#d5e1e8;margin:14px 0}
+.big{font-size:19px;line-height:1.8}
+.quote{
+  font-size:21px;line-height:1.62;margin:28px 0;padding:22px 26px;
+  border:1px solid var(--line);border-radius:16px;
+  background:linear-gradient(120deg,rgba(85,229,255,.07),rgba(184,150,255,.055));
+}
+.flow{
+  font-family:ui-monospace,SFMono-Regular,Consolas,monospace;
+  background:#080c11;border:1px solid #243743;border-radius:16px;
+  padding:22px;white-space:pre-wrap;color:#dde8ee;line-height:1.72;overflow:auto;
+  font-size:13.5px;
+}
+.callout{
+  padding:18px 21px;border-left:3px solid var(--cyan);
+  background:rgba(85,229,255,.05);border-radius:0 13px 13px 0;margin:22px 0;
+}
+.gold{border-left-color:var(--gold);background:rgba(243,211,115,.06)}
+.step{position:relative;padding:0 0 28px 44px}
+.step:before{
+  content:"";position:absolute;left:8px;top:10px;width:16px;height:16px;
+  border-radius:50%;border:3px solid var(--cyan);background:var(--bg);
+}
+.step:after{content:"";position:absolute;left:15px;top:30px;bottom:0;width:2px;background:#293945}
+.step:last-child:after{display:none}
+.step:nth-child(2):before{border-color:#7ba8ff}
+.step:nth-child(3):before{border-color:var(--violet)}
+.step:nth-child(4):before{border-color:var(--gold)}
+.step:nth-child(5):before{border-color:var(--lime)}
+.step h3{margin:0 0 8px}
+.footer{padding:48px 0 72px;color:#7e909d;font-size:13px}
+strong{color:#fff}
+</style>
+</head>
+<body>
+
+<div class="hero">
+<div class="wrap">
+<div class="eyebrow">107 · STUDENT RESEARCH GROWTH</div>
+<h1>产品服务学生的科研成长。<br><span>导师匹配是入口，多智能体是核心，Harness 沿着同一条用户链组织能力。</span></h1>
+<p class="lead">这份文件取代此前容易把项目说成「通用科研运行时」的表述。服务对象不变，已有导师平台不换赛道。GitHub 与黑客松只提供可借鉴的组件、交互和工程机制，不能反过来改谁在用这个产品。</p>
+</div>
+</div>
+
+<section>
+<div class="wrap">
+<div class="sec">01 / THE IDEA</div>
+<h2>完整创意</h2>
+
+<p class="big">一个学生进入科研，不是先需要一个 Agent 操作系统，而是需要被连续托住：搞清自己做过什么、探索可能的方向、找到合适的导师、读该读的论文和项目、形成阶段性研究任务、真的把这一阶段做完、被审核和返工、把结果写回自己的成长状态，然后再出发。现在的系统已经能做其中最硬的一截——导师匹配，以及背后真正的多智能体工作流。缺的是把这一截嵌回完整的学生链，而不是把导师平台拆掉，另起一个抽象赛道。</p>
+
+<p class="big">所以创意不是「用 Mission 替换导师」。创意是：<b>导师匹配仍然是主入口，而且必须加强</b>；学生沿着成长链往前走时，系统用 Harness 切换科研 Skill，让 Paper Claw、导师工作流、读论文、做项目、写信、复盘共享同一份上下文和长期状态；<b>多智能体始终是完成阶段工作的核心</b>，Evidence / Review / Retry / AgentRun 全部继承；每次阶段结果写回成长画像后，下一次 Harness 根据新状态重新组织 Skill 和 Agent。别人第一次看见这个项目，应该记住：这是一个跟着学生从找导师走到做成研究的多智能体成长系统，不是又一个聊天机器人，也不是通用 Agent 框架套了个校园皮。</p>
+
+<div class="quote">一句话：<b>入口是找导师，主干是学生科研成长，发动机是多智能体，骨架是 Harness，记忆是写回后的成长状态。</b></div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">02 / WHO IT SERVES</div>
+<h2>服务对象锁死以后，扩展才不会走散</h2>
+
+<p>产品始终服务学生的科研成长。应用面变宽，是因为学生的真实链路本来就比「搜一个老师」长，不是因为我们想做开放科研操作系统。找方向、读论文、做项目、联系导师、复盘进展，都是同一类用户在同一段人生里会碰到的事。把它们接上，导师匹配会变得更准，因为系统开始知道这个学生是谁；成长功能也会变得更真，因为导师、论文、项目不再是孤立工具。</p>
+
+<p>因此有三条不能破的边界。第一，导师匹配是现有入口，要保留、要修检索、要让多智能体过程可见，不能降级成「第一个插件」。第二，代码以<b>增加框架和能力</b>为主：在现有 Paper Claw、导师工作流、Evidence、Review、Retry、AgentRun 上面加 Harness、共享状态和后续 Skill，而不是重写成另一个产品。第三，外部项目只准被借形状——Workspace 三栏、事件驱动界面、Skill 注册、成功路径固化——不准被借成新的服务对象。Coding Agent、课程刷题器、通用 Agent OS，都不是这个仓库该变成的东西。</p>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">03 / THE CHAIN</div>
+<h2>正确的扩展形态：一条用户链</h2>
+
+<p>学生不是在应用商店里切换能力，而是被同一条链往前推。Harness 根据当前成长状态决定下一截用哪个 Skill、拉起哪些 Agent；学生可以往前走、也可以退回某一截加强，但对象始终是同一个人、同一份状态。</p>
+
+<div class="flow">建立科研画像
+  学生是谁：做过的项目、读过的论文、会与不会、证据在哪
+        │
+        ▼
+探索方向
+  可能走哪：方向、差距、值得试的几条路
+        │
+        ▼
+匹配导师          ← 现有主入口，必须加强
+  谁适合带我：导师工作流 + 多智能体研究 / 匹配 / Review
+        │
+        ▼
+阅读论文与项目
+  为了走进这个方向 / 跟上这位导师：Paper Claw 接到同一状态
+        │
+        ▼
+形成研究任务
+  这一阶段具体做什么、怎样算做成
+        │
+        ▼
+调用多智能体完成阶段工作
+  不同 Agent 持有不同工具与权限，由 AgentRun 执行
+        │
+        ▼
+Evidence → Review → Retry
+  没证据不准过；过期或不足就返工
+        │
+        ▼
+把结果写回成长状态
+  画像、方向判断、导师关系、已读文献、已完成任务一起更新
+        │
+        ▼
+下一次 Harness 根据新状态
+  重新组织 Skill 和 Agent，进入下一阶段或补上一段缺口</div>
+
+<p>这条链里，导师匹配不是被路过的旧功能，而是中段最强的节。前面的画像和方向探索是为了让匹配不再只靠关键词；后面的论文、项目、任务、联系导师，是匹配之后学生真正要过的活。少了后面，匹配是死推荐；少了前面，匹配是盲搜。加强入口，和把链写完整，是同一件事。</p>
+
+<div class="callout"><b>「学习」在这里的意思：</b>沿着科研链补方向、论文、方法、项目里缺的那一块，不是另做一套课程出题 / 掌握度 Tutor。课程产品会把仓库拉成第二条赛道。</div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">04 / WHAT TO INHERIT</div>
+<h2>已经有的东西放在链上的哪里</h2>
+
+<p><b>导师平台前端</b>继续当学生进门的地方：搜索、详情、对比、星图、邮件都留。它们以后共享同一次学生状态和同一次 AgentRun，不再是互不相干的工具页。邮件就是「联系导师」这一截，不是独立产品。</p>
+
+<p><b>导师工作流</b>继续当「匹配导师」以及后续阶段工作的多智能体引擎：理解输入、规划、领域研究、导师研究、匹配、独立审核、返工、合成。默认可以仍是确定性流水线，需要判断的节点再上模型；但前端必须把 Agent 过程亮出来，不能再压成 thinking。</p>
+
+<p><b>Paper Claw</b>继续当「阅读论文与项目」的多智能体能力，接到同一 Harness，而不是第二套网站。它已有的论文 embedding 检索，用在论文 Skill 里，不要冒充导师搜索已经做了生成式 RAG。</p>
+
+<p><b>Evidence / Review / Retry / AgentRun</b>是整条链的可信层，不限于找导师。读论文得出的主张、项目复现是否成立、给导师写信前的事实，都要过同一套证据合同。Harness 不替代它们，只负责：多个科研 Skill 的注册与切换、共享上下文、长期成长状态、按新状态重新组织下一轮 Agent。</p>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">05 / RAG FIRST</div>
+<h2>先把检索修成可信层，再让链上的 Skill 去用它</h2>
+
+<p>现在效果差，是因为导师主路径把无门槛 TF-IDF 叫成了 RAG，比赛副本里语料文件还丢了；论文向量检索存在，却没接到学生主路径。若在这种检索上直接包 Harness，后面每个 Skill 都会继承不可信的证据。</p>
+
+<p>必须先做成四类<b>分库检索</b>，而不是一个万能向量桶。导师库：结构化教师卡与证据，要有门槛、有 top-k，噪声不得短路官网与论文补全。论文库：复用已有 chunk / embedding，供阅读与引用。项目库：学生作品、开源仓库、复现对象，按任务检索。用户经历：<b>画像本身是结构化成长状态</b>（会什么、证据是什么、何时验证），不是把整个人 embed 进一个向量；只有笔记、报告、聊天里的自由文本才进入经历检索。Skill 声明自己能用哪几类库，Matcher 和 Reviewer 读检索结果，不让检索器直接生成「适合你」的句子。</p>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">06 / MULTI-AGENT + HARNESS</div>
+<h2>多智能体是核心，Harness 是组织者</h2>
+
+<p>比赛和长期系统都把多智能体放在核心，这一点不变。核心的意思是：阶段工作由不同目标、不同工具、不同权限的 Agent 完成，Reviewer 不能去检索，Matcher 不能偷偷改证据，合成器不能无中生有。不是每个按钮都固定拉起一群会聊天的人设。已知的导师库查询、已固化的官网路径，可以走确定性步骤；不确定、需要分头查、需要对质的阶段，才上多智能体。这仍然是多智能体系统，只是 Harness 按学生当前处在链的哪一截，决定这一次的拓扑。</p>
+
+<p>随着学生从选方向走到找导师、读论文、做项目、联系导师、复盘，切换的是 Skill，不是服务对象。共享的是画像、证据账本、正在进行的任务和 AgentRun 历史。下一次组织方式会变，是因为成长状态变了：已经匹配到导师之后，下一轮更可能是读他的近期论文、形成小任务、准备邮件，而不是再盲搜一遍全校。</p>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">07 / BUILD ORDER</div>
+<h2>施工顺序：把链接上，不是把平台换掉</h2>
+
+<div class="timeline">
+<div class="step">
+<h3>先修可信检索</h3>
+<p>语料进仓，导师检索有门槛，论文检索接到学生路径，经历分成结构化画像和文本检索。没有这一层，Review 只能检查格式，不能检查真伪。</p>
+</div>
+<div class="step">
+<h3>再加强入口</h3>
+<p>导师匹配留在主界面。Agent 过程、Evidence、Review、Retry 可见。星图、对比、邮件仍为这次匹配服务，并开始写入同一学生状态。</p>
+</div>
+<div class="step">
+<h3>加上 Harness，接入已有工作流和 Paper Claw</h3>
+<p>薄 Runtime：注册 Skill、共享上下文、启动 AgentRun。导师工作流是 Mentor Skill，Paper Claw 是 Reading Skill。不重写编排器，不新开产品。</p>
+</div>
+<div class="step">
+<h3>补齐链的前后节</h3>
+<p>画像建立与方向探索接在匹配之前；阶段任务、项目工作、联系导师、复盘写回接在匹配之后。每一节都把结果写回成长状态，供下一轮 Harness 使用。</p>
+</div>
+<div class="step">
+<h3>再谈可扩展的开源面</h3>
+<p>在学生链稳定之后，才把领域数据、证据规则、典型任务做成可替换 Pack。开源贡献的是这条链上的领域能力，不是把项目改成别的用户的工具。</p>
+</div>
+</div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+<div class="sec">08 / KEEP THIS</div>
+<h2>以后只问这一句</h2>
+
+<p class="big">这件事是在加强学生从「认识自己、选方向、找导师、读文献、做任务、被审核、写回成长」这条链，还是在把已有导师平台替换成另一个赛道？是前者，做；是后者，不加。</p>
+
+<div class="quote">建立科研画像 → 探索方向 → 匹配导师 → 阅读论文与项目 → 形成研究任务 → 多智能体完成阶段工作 → Review / Retry → 写回成长状态 → Harness 按新状态重新组织 Skill 和 Agent。<br><br><b>学生是用户，导师匹配是入口，多智能体是核心，Harness 是沿着这条链生长的骨架。</b></div>
+</div>
+</section>
+
+<div class="footer">
+<div class="wrap">
+队内对齐稿。继承现有 Paper Claw、导师工作流、Evidence、Review、Retry、AgentRun；外部黑客松项目只借机制，不借服务对象。<br>
+检索必须先成为导师 / 论文 / 项目 / 用户经历的可信层，再让后续 Skill 使用。
+</div>
+</div>
+
+</body>
+</html>

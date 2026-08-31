@@ -55,7 +55,7 @@
   transform: translateX(-50%);
   width: 0;
   height: 3px;
-  background: #667eea;
+  background: #94a3b8;
   border-radius: 1.5px 1.5px 0 0;
   transition: width 0.2s;
 }

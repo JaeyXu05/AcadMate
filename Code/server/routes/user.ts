@@ -1,5 +1,6 @@
 import { Router, Response } from 'express';
 import { getDb } from '../db';
+import { loadGrowthState } from '../data/growthStore';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 export const userRouter = Router();
@@ -97,8 +98,20 @@ userRouter.delete('/account', (req: AuthRequest, res: Response) => {
     res.status(404).json({ message: '用户不存在' });
     return;
   }
-  // favorites / user_settings / search_history / chat_history 均有 ON DELETE CASCADE，自动清理
+  // favorites / user_settings / search_history / chat_history / growth_state 均有 ON DELETE CASCADE，自动清理
   res.json({ deleted: true });
+});
+
+/** GET /api/user/growth — 科研成长状态 */
+userRouter.get('/growth', (req: AuthRequest, res: Response) => {
+  res.json(loadGrowthState(req.userId!));
+});
+
+/** PUT /api/user/growth — 成长状态只允许服务端从 Review PASS 的 AgentRun 写回。 */
+userRouter.put('/growth', (_req: AuthRequest, res: Response) => {
+  res.status(403).json({
+    message: '科研成长状态为审核结果，只能由 Review PASS 的 AgentRun 写回',
+  });
 });
 
 function safeParse(val: string): string[] {

@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from time import perf_counter
 
 from backend.mentor_workflow.errors import TemporaryToolError, ToolTimeoutError
 from backend.mentor_workflow.evidence import EvidenceLedger
 from backend.mentor_workflow.research_tools import MentorResearchTool
+from backend.mentor_workflow.query_semantics import (
+    build_query_contract,
+    candidate_relevance,
+    evidence_query_relevant,
+    freshness_label,
+    qualifies,
+)
+from backend.mentor_workflow.retrieval_manager import RetrievalManagerAgent
 from backend.mentor_workflow.schemas import (
     CandidateMentor,
     DomainJudgement,
@@ -129,16 +138,34 @@ class DynamicDomainExpertAgent:
         selected = [
             config
             for config in DOMAIN_CONFIGS
-            if any(trigger.casefold() in query for trigger in config.triggers)
+            if any(_trigger_hits(trigger, query) for trigger in config.triggers)
         ]
         if not selected:
-            selected = [DOMAIN_CONFIGS[0]]
+            return [
+                DomainJudgement(
+                    expert_name="query_boundary_expert",
+                    domain="query_specific",
+                    search_concepts=_unique(
+                        [
+                            *intent.research_topics,
+                            *intent.methods,
+                            *intent.application_domains,
+                            *intent.query_contract.expanded_terms,
+                        ]
+                    ),
+                    exclusions=["parent-concept substitutions", "unrelated application domains"],
+                    boundary="Use the query contract only; do not generalize to AI/ML parents.",
+                    interdisciplinary_links=[],
+                    conflicts=[],
+                )
+            ]
         judgements: list[DomainJudgement] = []
         for config in selected:
             concepts = [
                 *intent.research_topics,
                 *intent.methods,
                 *intent.application_domains,
+                *intent.query_contract.expanded_terms,
             ]
             for term, synonyms in config.synonyms.items():
                 if term.casefold() in query or any(
@@ -172,6 +199,7 @@ class MentorResearchAgent:
     ) -> None:
         self.tool = tool
         self.tool_timeout_seconds = tool_timeout_seconds
+        self.retrieval_manager = RetrievalManagerAgent()
 
     def run(
         self,
@@ -181,18 +209,26 @@ class MentorResearchAgent:
     ) -> MentorResearchResult:
         warnings: list[str] = []
         try:
-            local = self._call_tool("search_local", intent, domain_judgements)
+            combined = self.retrieval_manager.run(
+                intent,
+                domain_judgements,
+                self._call_tool,
+            )
         except TemporaryToolError as exc:
             warnings.append(str(exc))
-            local = MentorResearchResult()
-        combined = local
-        if _needs_external_fallback(local):
-            try:
-                fallback = self._call_tool("search_fallback", intent, domain_judgements)
-            except TemporaryToolError as exc:
-                warnings.append(str(exc))
-                fallback = MentorResearchResult(used_fallback=True)
-            combined = _merge_research_results(local, fallback)
+            combined = MentorResearchResult(
+                warnings=[str(exc)],
+                source_chain=["retrieval_manager:local_failed"],
+                retrieval_attempts=[
+                    {
+                        "attempt": 1,
+                        "retriever": "local",
+                        "status": "failed",
+                        "error": str(exc),
+                    }
+                ],
+            )
+        combined = _enforce_query_boundary(combined, intent)
         ledger = EvidenceLedger(existing_evidence)
         reference_map: dict[str, str] = {}
         for record in combined.evidence:
@@ -219,6 +255,9 @@ class MentorResearchAgent:
             used_fallback=combined.used_fallback,
             source_chain=combined.source_chain,
             unresolved_candidate_ids=combined.unresolved_candidate_ids,
+            retrieval_attempts=combined.retrieval_attempts,
+            coverage_report=combined.coverage_report,
+            relation_judgements=combined.relation_judgements,
         )
 
     def _call_tool(
@@ -280,6 +319,148 @@ def _rewrite_refs(
     )
 
 
+def _enforce_query_boundary(
+    result: MentorResearchResult,
+    intent: IntentPacket,
+) -> MentorResearchResult:
+    contract = intent.query_contract
+    if not contract.canonical_query:
+        contract = build_query_contract(
+            intent.raw_message,
+            intent.research_topics,
+            intent.methods,
+            intent.application_domains,
+        )
+    records_by_candidate: dict[str, list[EvidenceRecord]] = {}
+    for record in result.evidence:
+        if record.candidate_id:
+            records_by_candidate.setdefault(record.candidate_id, []).append(record)
+    kept: list[CandidateMentor] = []
+    scores: dict[str, float] = {}
+    match_types: dict[str, str] = {}
+    for raw_candidate in result.candidates:
+        candidate = raw_candidate.model_copy(deep=True)
+        bound = records_by_candidate.get(candidate.candidate_id, [])
+        verified_fields = {
+            field.strip()
+            for record in bound
+            if record.metadata.get("identity_verified") is True
+            for field in str(record.metadata.get("supports_fields", "")).split(",")
+            if field.strip()
+        }
+        # The legacy paper aggregations are name-only and currently have no
+        # verified author identities. Missing facts remain unknown.
+        if "methods" not in verified_fields:
+            candidate.methods = []
+        if "publications" not in verified_fields:
+            candidate.publications = []
+        if "projects" not in verified_fields:
+            candidate.projects = []
+        if "recruitment_status" not in verified_fields:
+            candidate.recruitment_status = None
+        official_topic_support = any(
+            record.metadata.get("identity_verified") is True
+            and "research_topics" in str(record.metadata.get("supports_fields", ""))
+            for record in bound
+        )
+        meta = dict(candidate.source_metadata)
+        if official_topic_support and not meta.get("topics_source"):
+            meta["topics_source"] = 1
+        meta["fallback"] = bool(result.used_fallback)
+        candidate.source_metadata = meta
+        score, match_type, breakdown = candidate_relevance(
+            contract, candidate, fallback=result.used_fallback
+        )
+        if not qualifies(score, match_type):
+            continue
+        candidate.source_metadata.update(
+            {
+                "absolute_relevance": score,
+                "match_type": match_type,
+                "query_contract": contract.canonical_query,
+                "must_preserve": ",".join(contract.must_preserve),
+                **{f"score_{key}": value for key, value in breakdown.items()},
+            }
+        )
+        kept.append(candidate)
+        scores[candidate.candidate_id] = score
+        match_types[candidate.candidate_id] = match_type
+    kept.sort(key=lambda item: (-scores[item.candidate_id], item.candidate_id))
+    kept = kept[:5]
+    kept_ids = {candidate.candidate_id for candidate in kept}
+    evidence: list[EvidenceRecord] = []
+    for record in result.evidence:
+        if record.candidate_id not in kept_ids:
+            continue
+        if record.metadata.get("identity_verified") is not True:
+            continue
+        supports = str(record.metadata.get("supports_fields", ""))
+        query_support = "research_topics" in supports or "methods" in supports
+        source = record.source_type.casefold()
+        level = "L1" if "official_faculty_profile" in source else "L2" if "official_faculty_directory" in source else "L3" if "paper" in source and record.metadata.get("identity_verified") is True else "L4" if any(item in source for item in ("openalex", "s2", "dblp", "arxiv")) else "L5"
+        # Source authority and query support are separate dimensions.  An
+        # official page can prove identity, but a broad parent topic on that
+        # page must not support a narrower query (for example ``人工智能``
+        # cannot qualify ``生成式人工智能``).  Every topic/method record is
+        # therefore checked against the frozen query contract, regardless of
+        # source level.
+        if query_support and not evidence_query_relevant(contract, record.title, record.extracted_fact):
+            continue
+        year = record.metadata.get("year")
+        try:
+            year_value = int(year) if year is not None and str(year).strip() else None
+        except (TypeError, ValueError):
+            year_value = None
+        evidence.append(
+            record.model_copy(
+                deep=True,
+                update={
+                    "query": contract.canonical_query,
+                    "query_relevance": 1.0 if query_support and match_types.get(record.candidate_id or "") == "DIRECT" else 0.82 if query_support else 0.0,
+                    "entity_verified": bool(record.metadata.get("identity_verified")),
+                    "support_type": match_types.get(record.candidate_id or "", "UNRELATED") if query_support else "IDENTITY",
+                    "source_level": level,
+                    "freshness": freshness_label(year_value, record.freshness.value if hasattr(record.freshness, "value") else str(record.freshness or "")),
+                },
+            )
+        )
+    allowed_evidence_ids = {record.evidence_id for record in evidence}
+    kept = [
+        candidate.model_copy(
+            deep=True,
+            update={
+                "evidence_refs": [
+                    reference
+                    for reference in candidate.evidence_refs
+                    if reference in allowed_evidence_ids
+                ]
+            },
+        )
+        for candidate in kept
+    ]
+    # A score is not enough: after query-conditioned evidence filtering, a
+    # candidate must retain at least one direct/adjacent supporting record.
+    # Identity-only evidence may remain in the ledger but cannot qualify a
+    # recommendation.
+    evidence_by_candidate = {}
+    for record in evidence:
+        if record.candidate_id and record.support_type in {"DIRECT", "ADJACENT"}:
+            evidence_by_candidate.setdefault(record.candidate_id, []).append(record)
+    kept = [
+        candidate
+        for candidate in kept
+        if candidate.evidence_refs
+        and evidence_by_candidate.get(candidate.candidate_id)
+    ]
+    warnings = list(result.warnings)
+    if not kept:
+        warnings.append(f"没有导师达到绝对相关性阈值：{contract.canonical_query}")
+    return result.model_copy(
+        deep=True,
+        update={"candidates": kept, "evidence": evidence, "warnings": _unique(warnings)},
+    )
+
+
 def _has_research_signal(candidate: CandidateMentor) -> bool:
     """Drop non-substantive stub candidates (no topics, no methods, no papers, no projects).
 
@@ -300,6 +481,20 @@ def _has_research_signal(candidate: CandidateMentor) -> bool:
 def _needs_external_fallback(result: MentorResearchResult) -> bool:
     if not result.candidates or result.unresolved_candidate_ids:
         return True
+    dense_retrieval = all(
+        candidate.source_metadata.get("retrieve_mode") == "dense_multilingual"
+        for candidate in result.candidates
+    )
+    if not dense_retrieval:
+        lexical_hits = [
+            int(candidate.source_metadata.get("retrieve_hits") or 0)
+            for candidate in result.candidates
+            if "retrieve_hits" in candidate.source_metadata
+        ]
+        if lexical_hits and max(lexical_hits) < 1:
+            # 旧稀疏检索全是余弦噪声时才走官网/论文补全；稠密检索由后续
+            # matching + evidence Review 负责淘汰，不再错误降级成长外部慢链。
+            return True
     records = {record.evidence_id: record for record in result.evidence}
     for candidate in result.candidates:
         if not candidate.research_topics or not candidate.evidence_refs:
@@ -392,6 +587,7 @@ def _merge_candidate(target: CandidateMentor, incoming: CandidateMentor) -> None
             setattr(target, field, getattr(incoming, field))
     for field in (
         "research_topics",
+        "application_domains",
         "methods",
         "publications",
         "projects",
@@ -402,6 +598,17 @@ def _merge_candidate(target: CandidateMentor, incoming: CandidateMentor) -> None
             field,
             _unique([*getattr(target, field), *getattr(incoming, field)]),
         )
+    target.topic_assertions = [
+        *target.topic_assertions,
+        *[
+            item
+            for item in incoming.topic_assertions
+            if item not in target.topic_assertions
+        ],
+    ]
+    target.publication_topics = _unique(
+        [*target.publication_topics, *incoming.publication_topics]
+    )
     target.source_metadata = {
         **incoming.source_metadata,
         **target.source_metadata,
@@ -415,12 +622,20 @@ def _candidate_missing_fields(candidate: CandidateMentor) -> list[str]:
         "affiliation": candidate.affiliation,
         "department": candidate.department,
         "research_topics": candidate.research_topics,
+        "application_domains": candidate.application_domains,
         "methods": candidate.methods,
         "projects": candidate.projects,
         "homepage": candidate.homepage,
         "recruitment_status": candidate.recruitment_status,
     }
     return [name for name, value in fields.items() if not value]
+
+
+def _trigger_hits(trigger: str, query: str) -> bool:
+    term = trigger.casefold()
+    if re.fullmatch(r"[a-z]{1,8}", term):
+        return bool(re.search(rf"(?<![a-z]){re.escape(term)}(?![a-z])", query))
+    return term in query
 
 
 def _unique(values: list[str]) -> list[str]:

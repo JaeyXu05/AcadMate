@@ -275,14 +275,57 @@ _BOILERPLATE_TOPIC_MARKERS = (
     "科技成果转化",
     "获奖信息",
     "招生信息",
+    "邮政编码",
+    "手机版",
 )
 # 完全等于这些片段的短词也不构成研究方向（多为模板残留）。
 _BOILERPLATE_TOPIC_EXACT = {"more", "gallery", "news", "vacancy"}
+_POSTAL_CODE_TOPIC = re.compile(r"(?:邮\s*编|邮政编码).{0,12}\d{5,6}|^\d{6}$")
+
+# 「成果/项目/荣誉」句判别标记：导师个人主页的「研究方向」段常紧跟一段
+# 论文/项目/获奖叙述（如「主持/参与国家自然科学基金…」「在研项目」「多项竞赛中获奖」）。
+# 这些是成果句而非研究方向（方向是名词短语），内联在方向段后、无换行，stop_markers
+# 拦不住，必须在切分后逐片段筛掉，避免污染检索向量与云图 domain 分类。
+_ACHIEVEMENT_TOPIC_MARKERS = (
+    "主持", "参与", "承担", "在研", "立项", "结题",
+    "基金", "项目", "课题", "计划", "基金资助",
+    "课题资助", "项目资助", "人才项目", "人才计划",
+    "国家自科", "国家自然科学", "国自然", "国家社科", "国家重点研发",
+    "国家杰青", "杰青", "优青", "面上项目", "青年科学基金", "青年项目",
+    "重点专项", "重大专项", "重大研究计划", "研究计划",
+    "获奖", "荣获", "获得", "获", "荣誉", "奖项", "入选", "学会优秀",
+    "取得了",
+    "发表", "论文", "专利", "授权", "著作", "出版",
+    "案例入库", "案例", "担任", "主编", "编委",
+)
+# 这些词单独出现过于泛，必须搭配其它成果词才判定为成果句，避免误杀合法方向。
+_ACHIEVEMENT_SOFT_MARKERS = ("项目", "计划", "获奖", "论文")
+
+
+def _is_achievement_topic(topic: str) -> bool:
+    """判断一个 topic 片段是否为成果/项目/荣誉叙述而非研究方向。
+
+    方向是名词短语（如"计算机视觉"、"强化学习"），成果句带动作/基金/荣誉词
+    （如"主持国家自然科学基金青年项目"、"ISCAS 2023 竞赛获奖"）。命中硬标记
+    直接判成果；命中软标记（"项目/计划/获奖/论文"）需再搭配至少一个其它成果
+    信号（动词/基金/荣誉），降低对"储能项目"这类含"项目"的方向的误杀。
+    """
+    text = " ".join(str(topic).split())
+    if not text:
+        return True
+    hard = [m for m in _ACHIEVEMENT_TOPIC_MARKERS if m in text]
+    if hard:
+        return True
+    soft = [m for m in _ACHIEVEMENT_SOFT_MARKERS if m in text]
+    return len(soft) >= 2
+
 
 
 def _is_boilerplate_topic(topic: str) -> bool:
     lowered = topic.casefold()
     if lowered in _BOILERPLATE_TOPIC_EXACT:
+        return True
+    if _POSTAL_CODE_TOPIC.search(topic):
         return True
     return any(marker in topic for marker in _BOILERPLATE_TOPIC_MARKERS)
 
@@ -304,6 +347,7 @@ def _split_topics(value: str) -> list[str]:
             and "暂无内容" not in topic
             and topic.casefold() not in {"research focus", "research interests"}
             and not _is_boilerplate_topic(topic)
+            and not _is_achievement_topic(topic)
         ):
             result.append(topic)
     return result

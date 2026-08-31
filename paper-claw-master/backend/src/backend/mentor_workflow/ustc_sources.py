@@ -23,6 +23,8 @@ from backend.mentor_workflow.schemas import (
     IntentPacket,
     MentorResearchResult,
 )
+from backend.mentor_workflow.query_semantics import build_query_contract
+from backend.mentor_workflow.topic_cleaning import clean_topics
 from backend.services.search import PaperSearchService
 
 USTC_AFFILIATION = "中国科学技术大学"
@@ -973,16 +975,23 @@ def _search_concepts(
     intent: IntentPacket,
     domain_judgements: list[DomainJudgement],
 ) -> list[str]:
+    contract = intent.query_contract
+    if not contract.canonical_query:
+        contract = build_query_contract(
+            intent.raw_message,
+            intent.research_topics,
+            intent.methods,
+            intent.application_domains,
+        )
+    # Domain judgements remain useful for college routing and audit notes, but
+    # must not broaden an official search beyond the typed query contract.
     return _unique(
         [
             *intent.research_topics,
             *intent.methods,
             *intent.application_domains,
-            *[
-                concept
-                for judgement in domain_judgements
-                for concept in judgement.search_concepts
-            ],
+            contract.canonical_query,
+            *contract.expanded_terms,
         ]
     )
 
@@ -1079,7 +1088,7 @@ def _split_topics(value: str) -> list[str]:
             and topic.casefold() not in {"research focus", "research interests"}
         ):
             result.append(topic)
-    return result
+    return clean_topics(result)
 
 
 def _recruitment_status(text: str) -> str | None:
@@ -1182,7 +1191,17 @@ def _person_key(value: str) -> str:
 
 def _contains(text: str, term: str) -> bool:
     normalized_term = _normalize(term)
-    return bool(normalized_term and normalized_term in _normalize(text))
+    if not normalized_term:
+        return False
+    hay = _normalize(text)
+    # 极短 ASCII 词做整词匹配，避免 "RL" 缩写在子串里误命中。
+    if re.fullmatch(r"[a-z0-9]{1,2}", normalized_term):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(normalized_term)}(?![a-z0-9])", hay
+            )
+        )
+    return normalized_term in hay
 
 
 def _normalize(value: str) -> str:

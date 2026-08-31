@@ -26,7 +26,7 @@ code/
 │   ├── data_scripts/                  （C：抓取与 RAG 构建脚本）
 │   │   └── README.md                  （C 写的抓取与 RAG 构建流程文档）
 │   └── data/                          （C 产出的 JSON 数据，含核心 RAG 库）
-│       └── ustc_mentor_rag.json       最终 RAG 库（715 导师 / 1580 证据，数据源）
+│       └── ustc_mentor_rag.json       当前进仓检索语料（180 导师 / 358 证据；星图仍用 cloud_data.json 的 715 节点）
 ├── cloud3d/                           【B · 3D 星图数据生成】
 │   ├── build_cloud.py                 读 RAG 库 → 生成 cloud_data.json（坐标/配色）
 │   └── cloud_data.json                银河盘可视化数据（主站后端 /api/cloud/graph 取用）
@@ -50,14 +50,14 @@ code/
 **数据流（核心）：**
 
 ```
-[官网/论文平台] --C抓取--> paper-claw-master/data/ustc_mentor_rag.json (715导师/1580证据)
+[官网/论文平台] --C抓取--> paper-claw-master/data/ustc_mentor_rag.json (检索语料 180导师/358证据)
                                     │
         ┌───────────────────────────┼──────────────────────────────┐
         ▼                           ▼                              ▼
    [A后端] mentor_workflow      [B云图] build_cloud.py        [D 网站前端]
    InternalMentorRag.retrieve()  --> cloud_data.json            GET /api/advisors/:id 等
    → 匹配/评分/邮件/PDF          → 主站后端 /api/cloud/graph        （云图已接真实 715 节点）
-                                 → CloudGraph.tsx(Three.js 渲染)     （检索/邮件/PDF/推荐均已接真实数据）
+                                 → CloudGraph.tsx(Three.js 渲染)     （检索走 180/358 语料）
 ```
 
 四部分之间的数据都通过 **`candidate_id`**（如 `ustc_faculty_26275`）关联，应与前端 `Advisor.id` / 云图 `CloudNode.id` 保持一致。
@@ -75,7 +75,7 @@ code/
 - 依赖：`cd Code && npm install`。
 - 启动：`npm run dev` → 前端 `http://localhost:5173`、后端 `http://localhost:3001`。
 - 登录账号：任意邮箱 + 密码（≥6 位）即注册即登录。
-- **当前状态**：云图已接真实 RAG 数据（`GET /api/cloud/graph`，715 导师）；检索已通过 D 代理接入 A 的真实后端（`MENTOR_AGENT_BASE_URL` 指向 :8000，A 不可达/失败时回退 stub 演示数据，见第四节）；邮件/推荐用真实 RAG，PDF 分析已用 `unpdf` 抽取正文生成 summary/keyPoints + 内容匹配推荐（非 stub）。
+- **当前状态**：云图已接真实 RAG 数据（`GET /api/cloud/graph`，715 导师）；检索已通过 D 代理接入 A 的真实后端（`MENTOR_AGENT_BASE_URL` 指向 :8000，未配置或 A 不可达时**不再回退 stub 导师**，直接报错）。邮件/推荐用语料 180/358，PDF 分析已用 `unpdf` 抽取正文生成 summary/keyPoints + 内容匹配推荐（非 stub）。
 
 **网站功能清单**（登录即注册，任意邮箱 + 密码 ≥6 位）：检索工作台（SSE 流式 + 导师卡片）、历史记录、导师详情页、收藏夹（2~4 位批量对比）、邮件模板、PDF 分析、猜你喜欢、个人信息/偏好设置/注销账号、云图（3D 星云图）。
 
@@ -154,9 +154,9 @@ interface Advisor { id, name, title, department, tags[], hIndex?, papers, matchS
 
 2. **`matchScore` / `explanation` 来源** ✅ **已实现**：这两项由 A 的检索流程动态计算，`Code/server/routes/agent.ts` 代理已把 `MatchResult.total_score` / `rationale` 映射进 `Advisor`。
 
-3. **检索接口形态** ✅ **已实现（D 代理轮询，前端零改动）**：前端仍走 `POST /api/agent/chat`（SSE 流式，`thinking/result/summary/done/error`）。D 后端内部把它转发成 A 的 `POST /api/mentor-workflows`（非流式轮询，`execute_immediately:false` → resume → 轮询 events/status → result），把 A 的 `events` 转成 `thinking`、把 `final_result.mentors[]`（`candidate`+`match` 嵌套）映射为扁平 `Advisor[]`。`MENTOR_AGENT_BASE_URL`（`Code/.env`）未配置或 A 连不上时自动回退 stub 假数据。**前端组件与 `services/agent.ts` 零改动**。
+3. **检索接口形态** ✅ **已实现（D 代理轮询）**：前端走 `POST /api/agent/chat`（SSE：结构化 `stage` 透传 `payload/evidence_refs`，并兼容 `thinking/result/summary/done/error`）。D 先尝试 A 的 `POST /api/runs`（skill `mentor_match`），失败则回退 `POST /api/mentor-workflows`，再 resume → 轮询 events/status → review/evidence/result。`MENTOR_AGENT_BASE_URL` 未配置或 A 连不上时**不回退王某某等 stub 导师**。详情页「阅读其论文」经 Harness 创建真实 Paper Claw `AgentRun`，使用 `RetrievalService` 取 chunk；只有 run 成功且回答引用检索证据时才 Review PASS 并服务端写回成长状态。
 
-4. ~~**云图接口形态（B/C）**~~ ✅ **已解决并完成集成**：后端 `GET /api/cloud/graph`（`Code/server/routes/cloud.ts`）读取 `cloud_data.json`，映射为 `CloudNode` 并动态生成同域关系边（`same-field`），前端 `CloudGraph.tsx` 已改为真实 Three.js 渲染 715 导师节点。云图数据不再走 mock。
+4. ~~**云图接口形态（B/C）**~~ ✅ **已解决并完成集成**：后端 `GET /api/cloud/graph`（`Code/server/routes/cloud.ts`）读取 `cloud_data.json`，映射为 `CloudNode` 并动态生成同域关系边（`same-field`），前端 `CloudGraph.tsx` 已改为真实 Three.js 渲染 715 导师节点。云图数据不再走 mock。**不要把星图 715 改成 180。**
 
 > 上述字段映射均按 **D 的协作铁律**收在 D 侧（`Code/server/routes/agent.ts` 的 `mapFinalMentor()`），A/C 输出格式零改动、前端组件零改动。
 
@@ -164,8 +164,8 @@ interface Advisor { id, name, title, department, tags[], hIndex?, papers, matchS
 
 > **通用约定**：API 前缀 `/api`；除登录外均需 `Authorization: Bearer <token>`；错误统一 `{message}`；前端契约在 `Code/src/types/`，服务层映射在 `Code/src/services/` 与 D 后端路由。D 已把每个协作功能的真实数据在服务层/路由层缝合，保持前端契约不变（`server/stub/advisors.ts` 为废弃的旧 mock，勿用）。
 
-**① 检索对话 `POST /api/agent/chat`**（SSE 流式；D 后端代理已接入 A 的真实检索，A 不可用时回退 stub）：
-`SSE` 事件序列（每条 `event: <type>\ndata: <JSON>\n\n`）：`thinking`（可多次）→ `result`（`{type:'result', advisors:Advisor[]}`，只发一次）→ `summary` → `done`/`error`。
+**① 检索对话 `POST /api/agent/chat`**（SSE 流式；D 后端代理接入 A；A 不可用时返回错误，不回退 stub）：
+`SSE` 事件序列（每条 `event: <type>\ndata: <JSON>\n\n`）：`stage`（审核/返工等）与 `thinking`（旧契约，可多次）→ `result`（`{type:'result', advisors:Advisor[], suggested_next_skill?}`）→ `summary` → `done`/`error`。
 
 **② 邮件模板 `POST /api/email/generate`**：`{advisor_id:string}` → `{subject:string, body:string}`。
 
@@ -205,7 +205,7 @@ interface Advisor { id, name, title, department, tags[], hIndex?, papers, matchS
 | PostgreSQL + pgvector | ✅ 已通过 Docker 启动过 | `paper-claw-master/docker-compose.yml`：`pgvector/pgvector:pg16`，容器 `paper-claw-postgres`，端口 5432 |
 | conda | ❌ 未安装 | （C 脚本不强制） |
 
-**当前 A 后端运行状态**：A 的多智能体后端已在此机器跑通过 —— Docker 起了 pgvector DB、alembic 迁移建表完成、从 `backend/src` 目录启动 uvicorn 后 `GET /api/health` 返回 `{"status":"ok"}`。**注意 Docker Desktop 不会随开机自动常驻**，重开会话后若 A 连不上（`.env` 里 `MENTOR_AGENT_BASE_URL` 指向的 :8000 不通），先手动启动 Docker Desktop 并 `cd paper-claw-master && docker compose up -d`，再起 uvicorn；D 网站此时会自动回退到 stub 演示数据，不阻塞。
+**当前 A 后端运行状态**：A 的多智能体后端需本机启动（Docker pgvector + uvicorn）。**注意 Docker Desktop 不会随开机自动常驻**，重开会话后若 A 连不上（`.env` 里 `MENTOR_AGENT_BASE_URL` 指向的 :8000 不通），先手动启动 Docker Desktop 并 `cd paper-claw-master && docker compose up -d`，再起 uvicorn。D 网站此时**不会**回退 stub 导师，检索会提示无法连接。
 
 > 启动步骤详细见第三节 3.2（A 部分）。
 
