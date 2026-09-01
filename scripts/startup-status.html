@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>科研导师推荐平台 · 正在启动</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: radial-gradient(circle at 50% 25%, #19264b, #090d19 55%); color: #eef4ff; }
+    main { width: min(520px, calc(100% - 48px)); text-align: center; padding: 40px; border: 1px solid #ffffff20; border-radius: 24px; background: #10182ccc; box-shadow: 0 24px 80px #0008; }
+    .orbit { width: 60px; height: 60px; margin: 0 auto 24px; border: 3px solid #76a8ff33; border-top-color: #76a8ff; border-radius: 50%; animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h1 { margin: 0 0 12px; font-size: 26px; }
+    p { color: #b9c8e8; line-height: 1.7; }
+    a { color: #8eb8ff; }
+    #detail { font-size: 14px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="orbit"></div>
+    <h1>平台正在启动</h1>
+    <p>正在拉起数据库和服务。准备完成后，本页会自动进入科研导师推荐平台。</p>
+    <p id="detail">等待服务响应…</p>
+    <p><a href="http://localhost:5173">手动进入平台</a></p>
+  </main>
+  <script>
+    const target = 'http://localhost:5173/';
+    const started = Date.now();
+    async function check() {
+      try {
+        await fetch(target, { mode: 'no-cors', cache: 'no-store' });
+        location.replace(target);
+      } catch (_) {
+        const seconds = Math.floor((Date.now() - started) / 1000);
+        document.querySelector('#detail').textContent = seconds > 180
+          ? '启动时间过长。请先运行“检查启动环境.bat”，或查看 .startup-logs 日志。'
+          : `已等待 ${seconds} 秒，首次启动 Docker 可能需要一两分钟…`;
+        setTimeout(check, 1500);
+      }
+    }
+    check();
+  </script>
+</body>
+</html>
