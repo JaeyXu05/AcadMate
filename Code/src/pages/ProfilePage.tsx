@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Form, Input, Select, Card, App, Empty, Tag } from 'antd';
-import { User, Mail, BookOpen, Users } from 'lucide-react';
+import { Form, Input, Select, Card, App, Empty, Tag, Spin } from 'antd';
+import { User, Mail, BookOpen, Users, Sparkles, ShieldCheck, AlertTriangle, Target } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
-import { getGrowth, emptyGrowth } from '../services/user';
+import { emptyGrowth, generateResearchProfile, getGrowth, getResearchProfile } from '../services/user';
+import type { ResearchProfile, ResearchCapabilityLevel } from '../services/user';
 import type { GrowthState } from '../types/auth';
 import PageCloseButton from '../components/PageCloseButton';
 import Button from '../components/Button';
+import { apiErrorMessage } from '../services/axios';
 import styles from './ProfilePage.module.css';
 
 const { TextArea } = Input;
@@ -18,18 +20,43 @@ const GRADE_OPTIONS = [
   '已毕业', '其他',
 ];
 
+const LEVEL_LABELS: Record<ResearchCapabilityLevel, string> = {
+  seen: '接触过',
+  understood: '理解',
+  implemented: '实现过',
+  reproduced: '复现过',
+  debugged: '调试过',
+  experimented: '实验验证过',
+  innovated: '形成创新',
+  unknown: '证据不足',
+};
+
 function ProfilePage() {
   const user = useAuthStore((s) => s.user);
   const updateProfile = useAuthStore((s) => s.updateProfile);
   const [form] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [growth, setGrowth] = useState<GrowthState>(emptyGrowth());
+  const [researchProfile, setResearchProfile] = useState<ResearchProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileGenerating, setProfileGenerating] = useState(false);
+  const [profileStale, setProfileStale] = useState(false);
   const { message } = App.useApp();
 
   useEffect(() => {
     getGrowth()
       .then(setGrowth)
       .catch(() => setGrowth(emptyGrowth()));
+    getResearchProfile()
+      .then((result) => {
+        setResearchProfile(result.profile);
+        setProfileStale(result.stale);
+      })
+      .catch(() => {
+        setResearchProfile(null);
+        setProfileStale(false);
+      })
+      .finally(() => setProfileLoading(false));
   }, []);
 
   const handleSave = async () => {
@@ -57,6 +84,20 @@ function ProfilePage() {
     }
   };
 
+  const handleGenerateProfile = async () => {
+    setProfileGenerating(true);
+    try {
+      const result = await generateResearchProfile();
+      setResearchProfile(result.profile);
+      setProfileStale(result.stale);
+      message.success('科研画像已由模型更新');
+    } catch (err: unknown) {
+      message.error(apiErrorMessage(err, '科研画像生成失败，请稍后重试'));
+    } finally {
+      setProfileGenerating(false);
+    }
+  };
+
   const email = user?.email || '';
   const displayName = user?.nickname || email || '未命名用户';
 
@@ -73,7 +114,7 @@ function ProfilePage() {
         </div>
       </div>
 
-      <Card className={styles.card}>
+      <Card className={`${styles.card} ${styles.identityCard}`}>
         <Form
           form={form}
           layout="vertical"
@@ -170,7 +211,108 @@ function ProfilePage() {
         </Form>
       </Card>
 
-      <Card className={styles.card} style={{ marginTop: 20 }} title={<span className="inline-flex items-center gap-2 text-slate-600"><BookOpen size={14} strokeWidth={1.5} className="text-slate-600" /> 科研成长状态</span>}>
+      <Card
+        className={`${styles.card} ${styles.researchProfileCard}`}
+        title={<span className={styles.cardTitle}><Sparkles size={15} /> 科研画像</span>}
+        extra={(
+          <Button
+            type="button"
+            variant="ghost"
+            size="small"
+            onClick={handleGenerateProfile}
+            disabled={profileGenerating}
+          >
+            {profileGenerating ? '模型分析中…' : researchProfile ? '重新生成' : '生成画像'}
+          </Button>
+        )}
+      >
+        {profileLoading ? (
+          <div className={styles.profileLoading}><Spin size="small" /> 正在读取最近画像…</div>
+        ) : !researchProfile ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="先完善上方资料，再由模型把兴趣、自述技能与已审核记录整理成科研画像"
+          />
+        ) : (
+          <div className={styles.profileBody}>
+            {profileStale && (
+              <div className={styles.staleNotice}>
+                <AlertTriangle size={15} /> 个人信息或成长记录已变化，请重新生成后再使用这份画像。
+              </div>
+            )}
+            <div className={styles.profileMeta}>
+              <span><ShieldCheck size={14} /> Review {researchProfile.review_status}</span>
+              <span>{new Date(researchProfile.generated_at).toLocaleString('zh-CN')}</span>
+            </div>
+            <p className={styles.profileSummary}>{researchProfile.summary}</p>
+
+            <section className={styles.profileSection}>
+              <h3>能力证据阶梯</h3>
+              {researchProfile.capabilities.length === 0 ? (
+                <span className={styles.growthEmpty}>尚无足够信息形成能力判断</span>
+              ) : (
+                <div className={styles.capabilityGrid}>
+                  {researchProfile.capabilities.map((item) => (
+                    <article key={`${item.name}-${item.level}`} className={styles.capabilityItem}>
+                      <div className={styles.capabilityHeading}>
+                        <strong>{item.name}</strong>
+                        <Tag color={item.level === 'unknown' ? 'default' : 'blue'}>{LEVEL_LABELS[item.level]}</Tag>
+                        <Tag color={item.evidence_status === 'reviewed' ? 'green' : item.evidence_status === 'self_reported' ? 'gold' : 'default'}>
+                          {item.evidence_status === 'reviewed' ? '已审核证据' : item.evidence_status === 'self_reported' ? '用户自述' : '未知'}
+                        </Tag>
+                      </div>
+                      <p>{item.assessment}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <div className={styles.profileColumns}>
+              <section className={styles.profileSection}>
+                <h3>研究方向</h3>
+                {researchProfile.directions.map((item) => (
+                  <div key={item.name} className={styles.profileListItem}>
+                    <strong>{item.name}</strong><Tag>{item.status}</Tag>
+                    <p>{item.rationale}</p>
+                  </div>
+                ))}
+              </section>
+              <section className={styles.profileSection}>
+                <h3>当前缺口</h3>
+                {researchProfile.gaps.map((item) => (
+                  <div key={item.gap} className={styles.profileListItem}>
+                    <strong>{item.gap}</strong>
+                    <p>{item.why_it_matters}</p>
+                  </div>
+                ))}
+              </section>
+            </div>
+
+            <section className={styles.profileSection}>
+              <h3><Target size={14} /> 下一步可验证行动</h3>
+              <ol className={styles.actionList}>
+                {researchProfile.next_actions.map((item) => (
+                  <li key={item.action}>
+                    <strong>{item.action}</strong>
+                    <span>交付物：{item.deliverable}</span>
+                    <span>验收：{item.acceptance_criteria.join('；')}</span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            {researchProfile.missing_information.length > 0 && (
+              <div className={styles.missingInfo}>
+                <strong>仍缺少的信息</strong>
+                <span>{researchProfile.missing_information.join('；')}</span>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      <Card className={`${styles.card} ${styles.growthCard}`} style={{ marginTop: 20 }} title={<span className="inline-flex items-center gap-2 text-slate-600"><BookOpen size={14} strokeWidth={1.5} className="text-slate-600" /> 科研成长状态</span>}>
         <p className={styles.growthHint}>只读记录：匹配成功与论文阅读会自动写回，不在此表单编辑。</p>
         <div className={styles.growthBlock}>
           <div className={styles.growthLabel}>已匹配导师</div>

@@ -1,5 +1,7 @@
 .container {
   position: relative;
+  display: flex;
+  flex-direction: column;
   max-width: 880px;
   margin: 0 auto;
   padding: 8px 8px 48px;
@@ -124,4 +126,196 @@
   font-size: 13px;
   line-height: 1.5;
   padding-left: 8px;
+}
+
+.identityCard {
+  order: 2;
+  margin-top: 20px;
+}
+
+.growthCard {
+  order: 3;
+}
+
+.cardTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.researchProfileCard {
+  order: 1;
+  background:
+    radial-gradient(circle at 95% 0%, rgba(99, 102, 241, 0.1), transparent 35%),
+    #fff !important;
+}
+
+.profileLoading {
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #78716c;
+  font-size: 13px;
+}
+
+.profileBody {
+  display: grid;
+  gap: 18px;
+}
+
+.staleNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #fcd34d;
+  border-radius: 9px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 13px;
+}
+
+.profileMeta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.profileMeta span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #047857;
+}
+
+.profileSummary {
+  margin: 0;
+  padding: 18px 20px;
+  border-left: 3px solid #6366f1;
+  border-radius: 0 12px 12px 0;
+  background: rgba(238, 242, 255, 0.72);
+  color: #312e81;
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.profileSection h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 10px;
+  color: #334155;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.capabilityGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.capabilityItem {
+  padding: 13px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.7);
+}
+
+.capabilityHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.capabilityHeading strong {
+  margin-right: auto;
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.capabilityItem p,
+.profileListItem p {
+  margin: 7px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.profileColumns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.profileListItem {
+  margin-bottom: 9px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: #fafaf9;
+}
+
+.profileListItem strong {
+  color: #44403c;
+  font-size: 13px;
+}
+
+.profileListItem :global(.ant-tag) {
+  margin-left: 7px;
+}
+
+.actionList {
+  display: grid;
+  gap: 9px;
+  margin: 0;
+  padding-left: 22px;
+}
+
+.actionList li {
+  padding: 10px 12px;
+  color: #475569;
+  border-radius: 9px;
+  background: #f8fafc;
+}
+
+.actionList strong,
+.actionList span {
+  display: block;
+}
+
+.actionList strong {
+  margin-bottom: 5px;
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.actionList span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.missingInfo {
+  display: grid;
+  gap: 4px;
+  padding-top: 14px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.35);
+  color: #78716c;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .capabilityGrid,
+  .profileColumns {
+    grid-template-columns: 1fr;
+  }
+
+  .profileMeta {
+    display: grid;
+  }
 }

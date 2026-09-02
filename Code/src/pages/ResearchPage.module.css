@@ -31,6 +31,9 @@
 .messageContent { padding: 12px 14px; border-radius: 12px; color: #292524; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
 .userMessage .messageContent { background: #eef2ff; color: #3730a3; }
 .agentMessage .messageContent { background: #f5f5f4; }
+.answerSectionTitle { display: block; margin: 13px 0 4px; color: #312e81; font-size: 12px; font-weight: 700; letter-spacing: .04em; }
+.answerSectionTitle:first-child { margin-top: 0; }
+.answerLine { display: block; min-height: 1.3em; }
 .composer { display: flex; align-items: flex-end; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid rgba(148,163,184,.16); }
 .composer :global(.ant-input) { border-radius: 10px; }
 .contextTitle { margin-bottom: 14px; }

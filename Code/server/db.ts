@@ -671,6 +671,8 @@ function ensureColumn(database: Database.Database, table: string, column: string
 /** 计划/报告/发件箱表不存在时补建，不依赖 user_version 是否已到 8/9。 */
 export function ensureProductivitySchema(database: Database.Database): void {
   database.exec(PRODUCTIVITY_DDL);
+  ensureColumn(database, 'users', 'research_profile_json', "research_profile_json TEXT NOT NULL DEFAULT '{}'");
+  ensureColumn(database, 'users', 'research_profile_updated_at', 'research_profile_updated_at TEXT');
   ensureColumn(database, 'plans', 'completed_at', 'completed_at TEXT');
   ensureColumn(database, 'email_outbox', 'attempt_count', 'attempt_count INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'email_outbox', 'last_attempt_at', 'last_attempt_at TEXT');

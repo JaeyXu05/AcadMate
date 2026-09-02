@@ -1,6 +1,8 @@
 import { Router, Response } from 'express';
+import { createHash } from 'crypto';
 import { getDb } from '../db';
-import { loadGrowthState } from '../data/growthStore';
+import { loadGrowthState, loadTrustedAgentContext } from '../data/growthStore';
+import { postHarnessRun } from '../harnessClient';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 
 export const userRouter = Router();
@@ -88,6 +90,95 @@ userRouter.put('/profile', (req: AuthRequest, res: Response) => {
     skills: safeParse(user.skills as string),
     bio: user.bio,
   });
+});
+
+function researchProfileSignature(context: ReturnType<typeof loadTrustedAgentContext>): string {
+  return createHash('sha256').update(JSON.stringify({
+    profile: context.profile,
+    growth: context.growth,
+  })).digest('hex');
+}
+
+function savedResearchProfile(userId: number): Record<string, unknown> | null {
+  const row = getDb().prepare(
+    'SELECT research_profile_json FROM users WHERE id=?',
+  ).get(userId) as { research_profile_json?: string } | undefined;
+  if (!row?.research_profile_json) return null;
+  try {
+    const parsed = JSON.parse(row.research_profile_json);
+    return parsed
+      && typeof parsed === 'object'
+      && !Array.isArray(parsed)
+      && parsed.type === 'research_profile'
+      && typeof parsed.summary === 'string'
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** GET /api/user/research-profile — 读取最近一次模型生成的科研画像。 */
+userRouter.get('/research-profile', (req: AuthRequest, res: Response) => {
+  const profile = savedResearchProfile(req.userId!);
+  const signature = researchProfileSignature(loadTrustedAgentContext(req.userId!));
+  res.json({
+    profile,
+    stale: Boolean(profile && profile.source_signature !== signature),
+  });
+});
+
+/** POST /api/user/research-profile — 用 A 端真实模型生成证据受限的科研画像。 */
+userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => {
+  const context = loadTrustedAgentContext(req.userId!);
+  const signature = researchProfileSignature(context);
+  try {
+    const result = await postHarnessRun({
+      skill_id: 'profile_analyze',
+      message: '根据个人信息与已审核成长记录生成科研画像',
+      context: {
+        user_id: String(req.userId!),
+        profile: context.profile,
+        growth: context.growth,
+      },
+    }, 28_000);
+    const artifact = result?.artifact;
+    const runStatus = String(result?.status || '');
+    const reviewStatus = String(result?.review_status || artifact?.review_status || '');
+    if (runStatus === 'waiting_for_user') {
+      const error = new Error(String(artifact?.error || '请先完善个人信息，再生成科研画像。'));
+      (error as Error & { status?: number }).status = 400;
+      throw error;
+    }
+    if (
+      runStatus !== 'succeeded'
+      || reviewStatus !== 'PASS'
+      || artifact?.type !== 'research_profile'
+      || typeof artifact?.summary !== 'string'
+    ) {
+      const detail = String(artifact?.error || '科研画像未通过证据审核，已保留原有画像，请补充资料后重试。');
+      const error = new Error(detail);
+      (error as Error & { status?: number }).status = 502;
+      throw error;
+    }
+    const saved = { ...artifact, source_signature: signature };
+    getDb().prepare(
+      "UPDATE users SET research_profile_json=?, research_profile_updated_at=datetime('now','localtime') WHERE id=?",
+    ).run(JSON.stringify(saved), req.userId!);
+    res.json({ profile: saved, stale: false });
+  } catch (error) {
+    const status = Number((error as { status?: number })?.status) || 502;
+    const raw = error instanceof Error ? error.message : '科研画像生成失败';
+    let message = raw;
+    if (/model.*not set|chat_model_missing|未配置/i.test(raw)) {
+      message = '科研画像需要模型服务，请先在环境配置中填写聊天模型后再试。';
+    } else if (/未启动|无法连接|fetch failed|econnrefused/i.test(raw)) {
+      message = '科研画像服务当前未就绪，请启动 PAPERCLAW Agent 后重试；已有画像和个人资料不会丢失。';
+    } else if (/超时|timeout|aborted/i.test(raw)) {
+      message = '科研画像生成超时，本次请求已停止；已有画像和个人资料不会丢失，请稍后重试。';
+    }
+    res.status(status).json({ message });
+  }
 });
 
 /** DELETE /api/user/account — 注销账号（级联删除 favorites/settings/history） */

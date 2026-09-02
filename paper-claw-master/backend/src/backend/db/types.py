@@ -63,6 +63,7 @@ class WorkflowName(StrEnum):
     direction_explore = "direction_explore"
     progress_report = "progress_report"
     plan_coach = "plan_coach"
+    profile_analyze = "profile_analyze"
 
 
 class RunStatus(StrEnum):
