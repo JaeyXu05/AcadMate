@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Input, App, Button, Empty, Spin, Checkbox } from 'antd';
+import { Input, App, Button, Empty, Spin, Checkbox, Select } from 'antd';
 import axios from 'axios';
-import { Mail, Copy, Zap, Send, Inbox, RotateCw, Save, X } from 'lucide-react';
+import { Mail, Copy, Zap, Send, Inbox, RotateCw, Save, X, Paperclip, FileText } from 'lucide-react';
 import * as userApi from '../services/user';
 import { getAdvisorDetail } from '../services/advisor';
 import {
   generateEmail, getEmailInbox, getEmailOutbox, getEmailSettings, getEmailStatus,
-  saveEmailSettings, sendEmailWithRecipients,
-  type EmailSettings,
+  saveEmailSettings, sendEmailWithRecipients, EMAIL_SCENARIO_OPTIONS,
+  type EmailAttachment, type EmailSettings,
 } from '../services/email';
 import type { AdvisorDetail } from '../types/advisor';
 import PageCloseButton from '../components/PageCloseButton';
@@ -34,6 +34,10 @@ function normalizePasswordForHost(host: string | undefined, value: string): stri
   return isUstcMailHost(host) ? removeUstcPasswordSpaces(value) : value;
 }
 
+const MAX_EMAIL_ATTACHMENTS = 5;
+const MAX_SINGLE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_ATTACHMENT_TOTAL_BYTES = 20 * 1024 * 1024;
+
 function mailLabel(status: { configured: boolean; reachable: boolean | null; message: string } | null): string {
   if (!status) return '检测中';
   if (!status.configured) return '未配置';
@@ -46,6 +50,31 @@ function mailStatusTitle(status: { configured: boolean; reachable: boolean | nul
   return status?.message || '检测中';
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function readAttachmentFile(file: File): Promise<EmailAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const comma = result.indexOf(',');
+      const contentBase64 = comma >= 0 ? result.slice(comma + 1) : result;
+      resolve({
+        filename: file.name,
+        contentBase64,
+        contentType: file.type || undefined,
+        size: file.size,
+      });
+    };
+    reader.onerror = () => reject(new Error(`读取附件失败：${file.name}`));
+    reader.readAsDataURL(file);
+  });
+}
+
 function EmailPage() {
   const [searchParams] = useSearchParams();
   const { message } = App.useApp();
@@ -56,6 +85,7 @@ function EmailPage() {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [recipientText, setRecipientText] = useState('');
+  const [emailScenario, setEmailScenario] = useState<string>('postgraduate');
   const [mailSettings, setMailSettings] = useState<EmailSettings | null>(null);
   const [smtpPassword, setSmtpPassword] = useState('');
   const [imapPassword, setImapPassword] = useState('');
@@ -74,6 +104,7 @@ function EmailPage() {
   const [imapStatus, setImapStatus] = useState<{ configured: boolean; reachable: boolean | null; message: string } | null>(null);
   const [outbox, setOutbox] = useState<Array<Record<string, any>>>([]);
   const [inbox, setInbox] = useState<Array<{ uid: number; from: string; subject: string; date?: string; text: string }>>([]);
+  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
   const [activityWidth, setActivityWidth] = useState(() => {
     try {
       const saved = Number(window.localStorage.getItem('email-activity-width'));
@@ -81,6 +112,7 @@ function EmailPage() {
     } catch { return 320; }
   });
   const bodyRef = useRef<HTMLDivElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const resizingActivity = useRef(false);
 
   // 加载收藏夹导师列表（取详情用于展示姓名/院系）。
@@ -125,7 +157,7 @@ function EmailPage() {
     if (!selectedId) return;
     setGenerating(true);
     try {
-      const draft = await generateEmail(selectedId);
+      const draft = await generateEmail(selectedId, emailScenario);
       setSubject(draft.subject);
       setBody(draft.body);
       if (draft.default_recipients?.length) setRecipientText(draft.default_recipients.join(', '));
@@ -151,6 +183,39 @@ function EmailPage() {
     }
   };
 
+  const addAttachmentFiles = async (files: FileList | null) => {
+    if (!files || !files.length) return;
+    const selected = Array.from(files);
+    const next = [...attachments];
+    let totalBytes = next.reduce((sum, item) => sum + item.size, 0);
+    for (const file of selected) {
+      if (next.length >= MAX_EMAIL_ATTACHMENTS) {
+        message.warning(`一次最多添加 ${MAX_EMAIL_ATTACHMENTS} 个附件`);
+        break;
+      }
+      if (file.size > MAX_SINGLE_ATTACHMENT_BYTES) {
+        message.warning(`单个附件不能超过 10MB：${file.name}`);
+        continue;
+      }
+      if (totalBytes + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
+        message.warning('附件总大小不能超过 20MB');
+        break;
+      }
+      try {
+        next.push(await readAttachmentFile(file));
+        totalBytes += file.size;
+      } catch (error) {
+        message.error(error instanceof Error ? error.message : '读取附件失败');
+      }
+    }
+    setAttachments(next);
+    if (attachmentInputRef.current) attachmentInputRef.current.value = '';
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+
   const handleSend = async () => {
     if (!selectedId || !subject.trim() || !body.trim()) return;
     const recipients = recipientText
@@ -168,7 +233,7 @@ function EmailPage() {
     if (!window.confirm(`确认使用 ${mailSettings?.smtp_user || '当前 SMTP 账号'} 向以下地址发送吗？\n${recipients.join('\n')}`)) return;
     setSending(true);
     try {
-      const result = await sendEmailWithRecipients(selectedId, recipients, subject, body, smtpPassword);
+      const result = await sendEmailWithRecipients(selectedId, recipients, subject, body, smtpPassword, attachments);
       const sent = Array.isArray(result.items)
         ? result.items.length === recipients.length && result.items.every((item: { status?: string }) => item.status === 'sent')
         : result.item?.status === 'sent';
@@ -177,7 +242,10 @@ function EmailPage() {
         reachable: sent ? true : (current?.reachable ?? null),
         message: sent ? '通' : (result.smtp_configured ? '已配置' : '未配置'),
       }));
-      if (sent) message.success('邮件已发送');
+      if (sent) {
+        setAttachments([]);
+        message.success('邮件已发送');
+      }
       else if (!result.smtp_configured) message.success('邮件已进入待发送队列；SMTP 未配置，不会伪装成已发送');
       else message.warning(result.item?.error || '邮件未发出，请查看发件记录');
       await loadMailbox(false);
@@ -489,14 +557,23 @@ function EmailPage() {
             <span className={styles.editorHint}>
               {selectedAdvisor ? `收件人：${selectedAdvisor.name}（${selectedAdvisor.department}）` : '请先选择导师'}
             </span>
-            <button
-              className={styles.generateBtn}
-              onClick={handleGenerate}
-              disabled={!selectedId || generating}
-            >
-              <Zap size={14} strokeWidth={1.5} className="text-slate-600" />
-              {generating ? '生成中…' : '生成邮件'}
-            </button>
+            <div className={styles.editorHeaderActions}>
+              <Select
+                className={styles.scenarioSelect}
+                size="small"
+                value={emailScenario}
+                options={EMAIL_SCENARIO_OPTIONS}
+                onChange={setEmailScenario}
+              />
+              <button
+                className={styles.generateBtn}
+                onClick={handleGenerate}
+                disabled={!selectedId || generating}
+              >
+                <Zap size={14} strokeWidth={1.5} className="text-slate-600" />
+                {generating ? '生成中…' : '生成邮件'}
+              </button>
+            </div>
           </div>
 
           {subject || body ? (
@@ -523,6 +600,39 @@ function EmailPage() {
                   placeholder="邮件正文"
                   autoSize={{ minRows: 12 }}
                 />
+                <div className={styles.attachmentArea}>
+                  <input
+                    ref={attachmentInputRef}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(event) => void addAttachmentFiles(event.target.files)}
+                  />
+                  <button
+                    type="button"
+                    className={styles.attachmentBtn}
+                    onClick={() => attachmentInputRef.current?.click()}
+                    disabled={sending}
+                  >
+                    <Paperclip size={14} strokeWidth={1.5} />
+                    添加附件
+                  </button>
+                  {attachments.map((attachment, index) => (
+                    <span className={styles.attachmentItem} key={`${attachment.filename}-${index}`}>
+                      <FileText size={13} strokeWidth={1.5} />
+                      <span className={styles.attachmentName} title={attachment.filename}>{attachment.filename}</span>
+                      <span className={styles.attachmentSize}>{formatFileSize(attachment.size)}</span>
+                      <button
+                        type="button"
+                        className={styles.attachmentRemove}
+                        title="移除附件"
+                        onClick={() => removeAttachment(index)}
+                      >
+                        <X size={13} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
               </div>
               <div className={styles.editorFooter}>
                 <button

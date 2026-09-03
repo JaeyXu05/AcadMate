@@ -45,7 +45,7 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '30mb' }));
 
 // ---- 路由 ----
 app.use('/api/auth', authRouter);

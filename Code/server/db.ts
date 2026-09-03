@@ -18,7 +18,7 @@ let db: Database.Database;
 // ============================================================================
 
 /** 当前期望的 schema 版本（每新增一个迁移步骤 +1） */
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 
 const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS report_preferences (
@@ -90,6 +90,7 @@ const PRODUCTIVITY_DDL = `
         scheduled_at TEXT,
         sent_at      TEXT,
         error        TEXT,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
         created_at   TEXT    DEFAULT (datetime('now','localtime')),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
@@ -704,6 +705,10 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     version: 20,
     sql: PDF_ANALYSIS_DDL,
   },
+  {
+    version: 21,
+    sql: `ALTER TABLE email_outbox ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';`,
+  },
 ];
 
 /**
@@ -754,6 +759,7 @@ export function ensureProductivitySchema(database: Database.Database): void {
   ensureColumn(database, 'plans', 'completed_at', 'completed_at TEXT');
   ensureColumn(database, 'email_outbox', 'attempt_count', 'attempt_count INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'email_outbox', 'last_attempt_at', 'last_attempt_at TEXT');
+  ensureColumn(database, 'email_outbox', 'attachments_json', "attachments_json TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, 'progress_reports', 'generation_json', "generation_json TEXT NOT NULL DEFAULT '{}'");
   if (tableExists(database, 'plans')) {
     database.exec(`CREATE INDEX IF NOT EXISTS idx_plans_user_completed ON plans(user_id, completed_at)`);

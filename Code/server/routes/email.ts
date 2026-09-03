@@ -4,11 +4,13 @@ import { ragStore, type RagMentor } from '../data/ragAdvisors';
 import { loadLatestMentorMatchArtifact } from '../data/runArtifacts';
 import { loadRecommendMemory, studentIdentity, verifiedPaperTitles } from '../data/userMemory';
 import { loadUserProfile } from '../data/growthStore';
-import { cleanTopics } from '../data/topicBoilerplate';
+import { cleanTopics, stripEnumeratedPrefix } from '../data/topicBoilerplate';
+import { buildScenarioEmail, EMAIL_SCENARIOS, type EmailScenarioId } from '../data/emailTemplates';
 import { agentBase, emailGrowthPatch, probeAgent, runHarnessSkill } from '../harnessClient';
 import {
   drainEmailOutbox, getEmailSettings, imapConfigured, probeImap, probeSmtp,
   queueEmail, readInbox, saveEmailSettings, smtpConfigured,
+  type EmailAttachmentInput,
 } from '../services/mailer';
 import { ensureProductivitySchema, getDb } from '../db';
 
@@ -22,10 +24,43 @@ interface EmailRequestBody {
   body?: string;
   recipients?: unknown;
   smtp_password?: unknown;
+  attachments?: unknown;
+  email_scenario?: unknown;
 }
 
 const EMAIL_PATTERN = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
 const USTC_CLIENT_PASSWORD_PATTERN = /^[A-Za-z0-9]{16}$/;
+const MAX_EMAIL_ATTACHMENTS = 5;
+const MAX_EMAIL_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+function validatedEmailAttachments(value: unknown): { ok: true; items: EmailAttachmentInput[] } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, items: [] };
+  if (!Array.isArray(value)) return { ok: false, error: '附件格式不正确' };
+  if (value.length > MAX_EMAIL_ATTACHMENTS) return { ok: false, error: `一次最多添加 ${MAX_EMAIL_ATTACHMENTS} 个附件` };
+  const items: EmailAttachmentInput[] = [];
+  let totalBytes = 0;
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') return { ok: false, error: '附件格式不正确' };
+    const item = raw as Record<string, unknown>;
+    const filename = String(item.filename || '').trim().slice(0, 180);
+    const content = String(item.contentBase64 || '');
+    const dataStart = content.indexOf(',');
+    const base64 = dataStart >= 0 ? content.slice(dataStart + 1) : content;
+    if (!filename || !base64 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64.replace(/\s+/g, ''))) {
+      return { ok: false, error: '附件内容无效，请重新选择文件' };
+    }
+    totalBytes += Math.floor((base64.replace(/\s+/g, '').length * 3) / 4);
+    if (totalBytes > MAX_EMAIL_ATTACHMENT_BYTES) {
+      return { ok: false, error: '附件总大小不能超过 20MB' };
+    }
+    items.push({
+      filename,
+      contentBase64: base64.replace(/\s+/g, ''),
+      contentType: typeof item.contentType === 'string' && item.contentType.trim() ? item.contentType.trim().slice(0, 100) : undefined,
+    });
+  }
+  return { ok: true, items };
+}
 
 function isUstcMailHost(value: unknown): boolean {
   return String(value || '').toLowerCase().includes('ustc.edu.cn');
@@ -114,9 +149,11 @@ function localContactDraft(
   memory: ReturnType<typeof loadRecommendMemory>,
   profile: ReturnType<typeof loadUserProfile>,
 ): { subject: string; body: string } {
-  const direction = memory.core[0] || cleanTopics(candidate.research_topics, candidate.mentor_name)[0] || '相关研究';
+  const direction = stripEnumeratedPrefix(memory.core[0])
+    || cleanTopics(candidate.research_topics, candidate.mentor_name)[0]
+    || '相关研究';
   const topics = cleanTopics(candidate.research_topics, candidate.mentor_name);
-  const publication = papers[0] || candidate.publications?.[0] || '';
+  const publication = stripEnumeratedPrefix(papers[0] || candidate.publications?.[0] || '');
   const understanding = publication ? articleUnderstanding(publication, topics, candidate.methods || []) : '';
   const profileName = String(profile.nickname || '').trim();
   const profileEducation = [profile.grade, profile.major].map((value) => String(value || '').trim()).filter(Boolean).join(' / ');
@@ -207,7 +244,7 @@ emailRouter.get('/status', async (req: AuthRequest, res: Response) => {
 });
 
 emailRouter.post('/generate', async (req: AuthRequest, res: Response) => {
-  const { advisor_id } = (req.body ?? {}) as EmailRequestBody;
+  const { advisor_id, email_scenario } = (req.body ?? {}) as EmailRequestBody;
   if (!advisor_id) {
     res.status(400).json({ message: '请提供 advisor_id' });
     return;
@@ -221,6 +258,23 @@ emailRouter.post('/generate', async (req: AuthRequest, res: Response) => {
   const profile = loadUserProfile(req.userId!);
   const papers = verifiedPaperTitles(req.userId!, advisor_id);
   const memory = loadRecommendMemory(req.userId!);
+  const requestedScenario = String(email_scenario || 'postgraduate') as EmailScenarioId;
+  const scenario = EMAIL_SCENARIOS.some((item) => item.value === requestedScenario)
+    ? requestedScenario
+    : 'postgraduate';
+  const scenarioDraft = buildScenarioEmail(scenario, {
+    candidate,
+    profile,
+    papers,
+    memoryCore: memory.core,
+  });
+  res.json({
+    ...scenarioDraft,
+    default_recipients: mentorEmail(candidate) ? [mentorEmail(candidate)] : [],
+    source: `local:${scenario}`,
+  });
+  return;
+
   const local = localContactDraft(candidate, student, papers, memory, profile);
   const matchArtifact = loadLatestMentorMatchArtifact(req.userId!, advisor_id);
   const resumeTraceId = matchArtifact?.trace_id ? String(matchArtifact.trace_id) : '';
@@ -265,7 +319,7 @@ emailRouter.post('/generate', async (req: AuthRequest, res: Response) => {
 });
 
 emailRouter.post('/send', async (req: AuthRequest, res: Response) => {
-  const { advisor_id, subject, body, recipients, smtp_password } = (req.body ?? {}) as EmailRequestBody;
+  const { advisor_id, subject, body, recipients, smtp_password, attachments } = (req.body ?? {}) as EmailRequestBody;
   if (!advisor_id || !String(subject || '').trim() || !String(body || '').trim()) {
     res.status(400).json({ message: '导师、主题和正文不能为空' });
     return;
@@ -277,11 +331,17 @@ emailRouter.post('/send', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ message: '请至少填写一个有效收件人邮箱' });
     return;
   }
+  const validatedAttachments = validatedEmailAttachments(attachments);
+  if (!validatedAttachments.ok) {
+    res.status(400).json({ message: validatedAttachments.error });
+    return;
+  }
   ensureProductivitySchema(getDb());
   const outboxIds = targetRecipients.map((recipient) => queueEmail({
     userId: req.userId!, recipient,
     subject: String(subject).replace(/[\r\n]+/g, ' ').trim().slice(0, 300),
     body: String(body).trim().slice(0, 30000), kind: `advisor-contact:${advisor_id}`,
+    attachments: validatedAttachments.items,
   }));
   const transientPassword = typeof smtp_password === 'string' ? smtp_password : undefined;
   const delivery = await drainEmailOutbox(targetRecipients.length, req.userId!, transientPassword, outboxIds);

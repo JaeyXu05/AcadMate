@@ -44,6 +44,13 @@ export interface OutboxMessage {
   body: string;
   kind: string;
   scheduledAt?: string | null;
+  attachments?: EmailAttachmentInput[];
+}
+
+export interface EmailAttachmentInput {
+  filename: string;
+  contentBase64: string;
+  contentType?: string;
 }
 
 interface StoredEmailAccount {
@@ -401,8 +408,8 @@ export function configuredImapUser(userId?: number): string {
 export function queueEmail(message: OutboxMessage): number {
   const result = getDb().prepare(
     `INSERT INTO email_outbox
-      (user_id, recipient, subject, body, kind, status, scheduled_at)
-     VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
+      (user_id, recipient, subject, body, kind, status, scheduled_at, attachments_json)
+     VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
   ).run(
     message.userId,
     message.recipient,
@@ -410,8 +417,25 @@ export function queueEmail(message: OutboxMessage): number {
     message.body,
     message.kind,
     message.scheduledAt ?? null,
+    JSON.stringify(message.attachments ?? []),
   );
   return Number(result.lastInsertRowid);
+}
+
+function parseEmailAttachments(value: unknown): EmailAttachmentInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is EmailAttachmentInput => Boolean(item) && typeof item === 'object')
+    .map((item) => {
+      const entry = item as Record<string, unknown>;
+      return {
+        filename: String(entry.filename || '附件').slice(0, 180),
+        contentBase64: String(entry.contentBase64 || ''),
+        contentType: typeof entry.contentType === 'string' && entry.contentType
+          ? entry.contentType.slice(0, 100)
+          : undefined,
+      };
+    })
+    .filter((item) => item.filename && item.contentBase64);
 }
 
 export async function drainEmailOutbox(
@@ -428,7 +452,7 @@ export async function drainEmailOutbox(
   const idFilter = selectedIds.length ? `AND email_outbox.id IN (${selectedIds.map(() => '?').join(',')})` : '';
   const rows = db.prepare(
     `SELECT email_outbox.id, email_outbox.user_id, email_outbox.recipient, email_outbox.subject,
-            email_outbox.body, users.email AS reply_to
+            email_outbox.body, email_outbox.attachments_json, users.email AS reply_to
        FROM email_outbox
        JOIN users ON users.id = email_outbox.user_id
       WHERE email_outbox.status IN ('queued', 'retry')
@@ -437,7 +461,15 @@ export async function drainEmailOutbox(
         ${userFilter}
         ${idFilter}
       ORDER BY email_outbox.id LIMIT ?`,
-  ).all(...(userId ? [userId, ...selectedIds, limit] : [...selectedIds, limit])) as Array<{ id: number; user_id: number; recipient: string; subject: string; body: string; reply_to?: string }>;
+  ).all(...(userId ? [userId, ...selectedIds, limit] : [...selectedIds, limit])) as Array<{
+    id: number;
+    user_id: number;
+    recipient: string;
+    subject: string;
+    body: string;
+    attachments_json?: string | null;
+    reply_to?: string;
+  }>;
   if (!rows.length) return { sent: 0, failed: 0, configured: smtpAccountConfigured(account) };
   let sent = 0;
   let failed = 0;
@@ -446,6 +478,11 @@ export async function drainEmailOutbox(
     const rowAccount = effectiveAccount(userId ?? row.user_id, userId === row.user_id ? transientPassword : undefined);
     if (!smtpAccountConfigured(rowAccount)) continue;
     configured = true;
+    const parsedAttachments = parseEmailAttachments(row.attachments_json).map((attachment) => ({
+      filename: attachment.filename,
+      contentType: attachment.contentType,
+      content: Buffer.from(attachment.contentBase64, 'base64'),
+    }));
     const transport = nodemailer.createTransport({
       host: rowAccount.smtpHost,
       port: rowAccount.smtpPort,
@@ -461,6 +498,7 @@ export async function drainEmailOutbox(
         replyTo: validAddress(row.reply_to) ? row.reply_to : undefined,
         subject: row.subject,
         text: row.body,
+        ...(parsedAttachments.length ? { attachments: parsedAttachments } : {}),
       });
       db.prepare(
         `UPDATE email_outbox SET status='sent', sent_at=datetime('now','localtime'), error=NULL WHERE id=?`,

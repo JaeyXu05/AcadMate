@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from backend.mentor_workflow.evidence import EvidenceLedger
 from backend.mentor_workflow.schemas import (
     FinalMentorResult,
@@ -210,7 +212,21 @@ def _article_understanding(title: str, topics: list[str], methods: list[str]) ->
 
 def _short_email_text(value: str, *, limit: int = 160) -> str:
     text = " ".join(str(value or "").split()).strip()
+    text = _strip_enumerated_prefix(text)
     return text[:limit].rstrip("，。；、 ")
+
+
+_ENUMERATED_PREFIX = re.compile(r"^\s*(?:\d+\s*[)）:：.、，,]+|\[\d+\]\s*)+")
+
+
+def _strip_enumerated_prefix(value: str) -> str:
+    """去掉列表样式序号，避免把网页原样的 '1)、2)' 带进联系邮件。"""
+    previous = None
+    text = value
+    while text != previous:
+        previous = text
+        text = _ENUMERATED_PREFIX.sub("", text).strip()
+    return text
 
 
 def _email_phrases(values: list[str], *, limit: int) -> list[str]:

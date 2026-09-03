@@ -28,6 +28,16 @@ const INTRO_HINT = /(我|目前|近年|迄今|以第一|通讯作者|作者身�
 const PAPER_LINE_HINT = /DOI:|Distinguished Paper|Wiley|IEEE Transactions|JSSC|Nature Physics|Nature Nanotechnol|Adv\. Mater|J Am Chem Soc|Journal of the American Chemical Society|Light: Science|Geophysical Research Letters|Geochimica et Cosmochimica Acta|Applied Catalysis B/;
 const TITLE_LABEL = /^(博士生导师|硕士生导师|特任副研究员|博士后 \/ 副研究员|🧑‍🔬 博士后 \/ 副研究员|Special Associate Researcher)$/;
 
+/** 去除网页抓取文本里常见的 "1、"/"1)"/"[1]" 等列表序号前缀。 */
+export function stripEnumeratedPrefix(text: unknown): string {
+  const prefix = /^\s*(?:\d+\s*[)）:：.、，,]+|\[\d+\]\s*)+/;
+  let output = String(text ?? '').trim();
+  while (prefix.test(output)) {
+    output = output.replace(prefix, '').trim();
+  }
+  return output;
+}
+
 export function isBoilerplateTopic(topic: string): boolean {
   const text = String(topic || '').replace(/\s+/g, ' ').trim();
   if (!text) return true;
@@ -64,11 +74,12 @@ export function cleanTopics(values: unknown, mentorName?: string): string[] {
   const cleaned: string[] = [];
   for (const raw of values) {
     const text = String(raw || '').replace(/\s+/g, ' ').trim();
-    if (!text || isBoilerplateTopic(text) || isDirtyTopic(text, mentorName)) continue;
-    const key = text.toLowerCase();
+    const cleanedText = stripEnumeratedPrefix(text);
+    if (!cleanedText || isBoilerplateTopic(cleanedText) || isDirtyTopic(cleanedText, mentorName)) continue;
+    const key = cleanedText.toLowerCase();
     if (seen.has(key)) continue;
     seen.add(key);
-    cleaned.push(text);
+    cleaned.push(cleanedText);
   }
   return cleaned;
 }

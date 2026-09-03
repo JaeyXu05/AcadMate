@@ -1,9 +1,20 @@
 import api from './axios';
 import type { EmailDraft } from '../types/email';
 
+export const EMAIL_SCENARIO_OPTIONS = [
+  { value: 'postgraduate', label: '保研/考研联系导师' },
+  { value: 'strong_research', label: '有科研/竞赛经历' },
+  { value: 'strong_gpa', label: '成绩好但无科研经历' },
+  { value: 'paper_reader', label: '认真读过老师论文' },
+  { value: 'summer', label: '暑期/短期进组' },
+  { value: 'thesis', label: '本科毕业设计进组' },
+  { value: 'cross_major', label: '跨专业/转方向' },
+  { value: 'limited_info', label: '主页信息有限' },
+];
+
 /** 生成联系导师的邮件草稿 */
-export async function generateEmail(advisorId: string): Promise<EmailDraft> {
-  const { data } = await api.post<EmailDraft>('/email/generate', { advisor_id: advisorId });
+export async function generateEmail(advisorId: string, scenario?: string): Promise<EmailDraft> {
+  const { data } = await api.post<EmailDraft>('/email/generate', { advisor_id: advisorId, email_scenario: scenario });
   return data;
 }
 
@@ -33,12 +44,20 @@ export interface EmailSettings {
   imap_same_as_smtp: boolean;
 }
 
+export interface EmailAttachment {
+  filename: string;
+  contentBase64: string;
+  contentType?: string;
+  size: number;
+}
+
 export async function sendEmailWithRecipients(
   advisorId: string,
   recipients: string[],
   subject: string,
   body: string,
   smtpPassword?: string,
+  attachments?: EmailAttachment[],
 ) {
   return (await api.post('/email/send', {
     advisor_id: advisorId,
@@ -46,7 +65,10 @@ export async function sendEmailWithRecipients(
     subject,
     body,
     ...(smtpPassword ? { smtp_password: smtpPassword } : {}),
-  }, { timeout: 60000 })).data;
+    ...(attachments?.length ? {
+      attachments: attachments.map(({ filename, contentBase64, contentType }) => ({ filename, contentBase64, contentType })),
+    } : {}),
+  }, { timeout: 180000 })).data;
 }
 
 export async function getEmailSettings() {

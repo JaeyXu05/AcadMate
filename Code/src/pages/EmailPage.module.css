@@ -456,6 +456,16 @@
   color: #78716c;
 }
 
+.editorHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scenarioSelect {
+  min-width: 176px;
+}
+
 .generateBtn,
 .copyBtn {
   display: flex;
@@ -503,6 +513,77 @@
   gap: 10px;
   padding: 14px 18px;
   border-top: 1px solid rgba(28, 25, 23, 0.06);
+}
+
+.attachmentArea {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.attachmentBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px dashed rgba(28, 25, 23, 0.26);
+  background: #fff;
+  color: #57534e;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.attachmentBtn:hover {
+  border-color: #1c1917;
+  color: #1c1917;
+}
+
+.attachmentBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.attachmentItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid rgba(28, 25, 23, 0.12);
+  background: #fafaf9;
+  color: #44403c;
+  font-size: 12px;
+}
+
+.attachmentName {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachmentSize {
+  flex-shrink: 0;
+  color: #a8a29e;
+  font-size: 11px;
+}
+
+.attachmentRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #a8a29e;
+  cursor: pointer;
+}
+
+.attachmentRemove:hover {
+  color: #b91c1c;
 }
 
 .placeholder {
