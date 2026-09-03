@@ -18,7 +18,7 @@ let db: Database.Database;
 // ============================================================================
 
 /** 当前期望的 schema 版本（每新增一个迁移步骤 +1） */
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 19;
 
 const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS report_preferences (
@@ -96,6 +96,27 @@ const PRODUCTIVITY_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_email_outbox_status
         ON email_outbox(status, scheduled_at);
+
+      CREATE TABLE IF NOT EXISTS email_accounts (
+        user_id              INTEGER PRIMARY KEY,
+        smtp_host            TEXT NOT NULL DEFAULT '',
+        smtp_port            INTEGER NOT NULL DEFAULT 465,
+        smtp_secure          INTEGER NOT NULL DEFAULT 1,
+        smtp_user            TEXT NOT NULL DEFAULT '',
+        smtp_from            TEXT NOT NULL DEFAULT '',
+        smtp_pass_encrypted  TEXT NOT NULL DEFAULT '',
+        smtp_remember        INTEGER NOT NULL DEFAULT 0,
+        imap_host            TEXT NOT NULL DEFAULT '',
+        imap_port            INTEGER NOT NULL DEFAULT 993,
+        imap_secure          INTEGER NOT NULL DEFAULT 1,
+        imap_user            TEXT NOT NULL DEFAULT '',
+        imap_mailbox         TEXT NOT NULL DEFAULT 'INBOX',
+        imap_pass_encrypted  TEXT NOT NULL DEFAULT '',
+        imap_remember        INTEGER NOT NULL DEFAULT 0,
+        imap_same_as_smtp   INTEGER NOT NULL DEFAULT 0,
+        updated_at           TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
 `;
 
 const RESEARCH_DDL = `
@@ -623,6 +644,38 @@ const MIGRATIONS: { version: number; sql: string }[] = [
   {
     version: 16,
     sql: PAPER_SEARCH_DDL,
+  },
+  {
+    version: 17,
+    sql: `
+      CREATE TABLE IF NOT EXISTS email_accounts (
+        user_id              INTEGER PRIMARY KEY,
+        smtp_host            TEXT NOT NULL DEFAULT '',
+        smtp_port            INTEGER NOT NULL DEFAULT 465,
+        smtp_secure          INTEGER NOT NULL DEFAULT 1,
+        smtp_user            TEXT NOT NULL DEFAULT '',
+        smtp_from            TEXT NOT NULL DEFAULT '',
+        smtp_pass_encrypted  TEXT NOT NULL DEFAULT '',
+        smtp_remember        INTEGER NOT NULL DEFAULT 0,
+        imap_host            TEXT NOT NULL DEFAULT '',
+        imap_port            INTEGER NOT NULL DEFAULT 993,
+        imap_secure          INTEGER NOT NULL DEFAULT 1,
+        imap_user            TEXT NOT NULL DEFAULT '',
+        imap_mailbox         TEXT NOT NULL DEFAULT 'INBOX',
+        imap_pass_encrypted  TEXT NOT NULL DEFAULT '',
+        imap_remember        INTEGER NOT NULL DEFAULT 0,
+        updated_at           TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+    `,
+  },
+  {
+    version: 18,
+    sql: `ALTER TABLE email_accounts ADD COLUMN imap_same_as_smtp INTEGER NOT NULL DEFAULT 0;`,
+  },
+  {
+    version: 19,
+    sql: `UPDATE email_accounts SET imap_same_as_smtp = 0 WHERE imap_same_as_smtp = 1;`,
   },
 ];
 

@@ -126,21 +126,86 @@ class ResultComposerAgent:
 def _contact_email(result: FinalMentorResult, intent: IntentPacket) -> str:
     mentor = result.candidate
     profile = intent.user_profile
-    sender = profile.name or "[请填写姓名]"
-    education = profile.education_level or "[请填写当前学历/年级]"
-    background = "、".join(_email_phrases(profile.background, limit=5)) or "[请填写与导师方向相关的学习背景]"
-    interests = "、".join(_email_phrases(mentor.research_topics, limit=3)) or "[请从已核验证据中选择研究方向]"
-    publication = _short_email_text(mentor.publications[0]) if mentor.publications else "[请从已核验证据中选择论文]"
-    return (
-        f"主题：关于 {interests} 方向学习与研究机会的咨询\n\n"
-        f"{mentor.mentor_name}老师您好：\n\n"
-        f"我是{sender}，目前为{education}。我的相关背景包括：{background}。"
-        f"我近期正在了解您公开的 {interests} 研究方向，并注意到公开资料中有《{publication}》。"
-        "我希望先从公开资料开始学习，并进一步确认适合自己的研究切入点。\n\n"
-        "如您方便，我希望进一步了解适合学生参与的研究准备与公开申请方式。"
-        "本邮件未假设您的招生状态，具体信息以您的正式回复或公开通知为准。\n\n"
-        f"感谢您的时间。\n{sender}"
+    sender = (profile.name or "").strip()
+    education = (profile.education_level or "").strip()
+    background = _email_phrases(profile.background, limit=5)
+    skills = _email_phrases(profile.skills, limit=5)
+    experiences = _email_phrases(profile.experiences, limit=3)
+    interests = _email_phrases(mentor.research_topics, limit=4)
+    direction = "、".join(interests) or "相关研究"
+    publication = _short_email_text(mentor.publications[0]) if mentor.publications else ""
+    understanding = _article_understanding(publication, interests, mentor.methods)
+
+    personal_lines: list[str] = []
+    if sender or education:
+        identity = []
+        if sender:
+            identity.append(f"我是{sender}")
+        if education:
+            identity.append(f"目前为{education}")
+        personal_lines.append("，".join(identity) + "。")
+    if background:
+        personal_lines.append(f"我的相关学习背景包括：{'、'.join(background)}。")
+    if skills:
+        personal_lines.append(f"目前我重点积累的能力包括：{'、'.join(skills)}。")
+    if experiences:
+        personal_lines.append(f"我曾接触或完成过{'、'.join(experiences)}，希望将这些积累继续用于严谨的科研训练。")
+    if not sender and not education:
+        personal_lines.insert(
+            0,
+            "【个人信息】（请填写姓名、学校、年级/专业，以及与申请研究相关的学习背景、技能或经历。）",
+        )
+
+    research_lines = [
+        f"我近期持续关注您公开的{direction}研究，希望进一步理解这些方向背后的关键问题、研究方法与实际应用。"
+    ]
+    if publication:
+        research_lines.append(
+            f"我尤其关注您的代表性论文《{publication}》。{understanding}"
+            "这让我认识到，严谨的问题建模、可靠的数据或实验设计，以及方法在真实科研场景中的可复现性同样重要。"
+        )
+    else:
+        research_lines.append(
+            "【论文与具体想法】（请补充导师的一篇代表性论文，并写下你对其研究问题、方法或结果的理解，以及希望进一步学习的问题。）"
+        )
+    research_lines.append(
+        f"结合我对{direction}的兴趣，我希望从基础阅读、复现实验和细致的数据整理等工作做起，逐步形成对该研究方向的深入理解。"
     )
+    research_lines.append(
+        "如果您目前有适合学生参与的科研、实习或研究生申请机会，我非常希望有机会进入您的课题组/实验室，"
+        "在您的指导下认真学习并承担力所能及的任务。若目前暂无合适名额，也恳请您在方便时指点我应当补充哪些知识与准备。"
+    )
+
+    sections = [
+        f"主题：关于{direction}方向学习与研究机会的咨询",
+        f"{mentor.mentor_name}老师您好：",
+        *personal_lines,
+        *research_lines,
+        "本邮件未假设您的招生状态，具体信息以您的正式回复或公开通知为准。",
+        "感谢您在百忙之中阅读这封邮件，期待有机会向您进一步请教。",
+        "此致",
+        "敬礼",
+        sender or "【个人信息】",
+    ]
+    return "\n\n".join(sections)
+
+
+def _article_understanding(title: str, topics: list[str], methods: list[str]) -> str:
+    """用公开题目和已核验方向写出克制的理解，避免虚构论文细节。"""
+    if not title:
+        return ""
+    lowered = title.lower()
+    topic_text = "与".join(topics[:2]) or "相关科学问题"
+    method_text = "、".join(_email_phrases(methods, limit=2))
+    if "deep learning potential" in lowered or "deep potential" in lowered:
+        return "从公开题目和研究方向看，我理解这项工作是把主动学习与深度学习势能模型结合起来，通过发现并补充有代表性的训练数据，提高模型对复杂原子或分子体系的可靠性与适用范围。"
+    if "graph neural" in lowered or "gnn" in lowered:
+        return f"从公开题目和研究方向看，我理解这项工作关注用图神经网络表达结构关系，并将这种结构化表示用于提升{topic_text}问题的建模能力。"
+    if any(marker in lowered for marker in ("molecular dynamics", "reaction", "combustion", "chemical")):
+        return f"从公开题目和研究方向看，我理解这项工作尝试将{method_text or '数据驱动的方法'}用于{topic_text}相关的动态过程分析，在保证计算效率的同时帮助理解复杂体系的演化规律。"
+    if any(marker in lowered for marker in ("software", "toolkit", "framework", "platform", "generator", "dispatcher")):
+        return f"从公开题目和研究方向看，我理解这项工作也重视把{topic_text}相关方法沉淀为可复用的软件、工具链或计算平台，从而支持后续研究稳定、可扩展地开展。"
+    return f"从论文题目及公开资料呈现的信息看，我理解这项工作围绕{topic_text}展开，重点是将{method_text or '数据驱动的方法'}用于解决具体研究问题；这也让我对从问题定义、方法设计到实验验证的完整过程产生了兴趣。"
 
 
 def _short_email_text(value: str, *, limit: int = 160) -> str:

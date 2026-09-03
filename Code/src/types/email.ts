@@ -7,4 +7,5 @@ export interface EmailGenerateRequest {
 export interface EmailDraft {
   subject: string;
   body: string;
+  default_recipients?: string[];
 }

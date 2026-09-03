@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Avatar, Dropdown, App } from 'antd';
 import type { MenuProps } from 'antd';
-import { User, Star, Settings, LogOut, Trash2 } from 'lucide-react';
+import { User, Star, Settings, Mail, LogOut, Trash2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { deleteAccount } from '../services/user';
 
@@ -68,6 +68,12 @@ function UserAvatarDropdown() {
       icon: <Settings size={14} strokeWidth={1.5} className="text-slate-600" />,
       label: '设置',
       onClick: () => navigate('/settings'),
+    },
+    {
+      key: 'emailSettings',
+      icon: <Mail size={14} strokeWidth={1.5} className="text-slate-600" />,
+      label: '邮件设置',
+      onClick: () => navigate('/email?settings=1'),
     },
     { type: 'divider' },
     {
