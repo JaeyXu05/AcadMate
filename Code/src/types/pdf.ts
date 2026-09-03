@@ -23,6 +23,11 @@ export interface PdfAnalysisResult {
   /** 据论文内容推荐的导师 */
   suggestedAdvisors: Advisor[];
   document_id?: string;
+  /** 多选合并分析时参与的文档列表 */
+  document_ids?: string[];
+  document_names?: string[];
+  /** 多选合并分析的展示标题 */
+  batchLabel?: string;
   review_status?: string;
   scoreKind?: Advisor['scoreKind'];
   evidence_refs?: string[];

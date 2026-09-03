@@ -25,6 +25,125 @@
   margin: 0 0 24px;
 }
 
+.history {
+  margin-bottom: 24px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid rgba(28, 25, 23, 0.08);
+}
+
+.historyHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.historyTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #44403c;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.historyHeader > span {
+  color: #a8a29e;
+  font-size: 12px;
+}
+
+.historyList {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.historyItem {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  background: #fff;
+  color: #57534e;
+  text-align: left;
+  cursor: pointer;
+}
+
+.historyItem:hover,
+.historyItemActive {
+  border-color: rgba(28, 25, 23, 0.24);
+  background: #fafaf9;
+}
+
+.historyViewBtn {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid rgba(28, 25, 23, 0.14);
+  background: #fff;
+  color: #57534e;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.historyViewBtn:hover {
+  color: #1c1917;
+  border-color: rgba(28, 25, 23, 0.3);
+}
+
+.historyActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+.historyFileIcon {
+  flex-shrink: 0;
+  color: #78716c;
+}
+
+.historyMain {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.historyFilename,
+.historyMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyFilename {
+  color: #44403c;
+  font-size: 13px;
+}
+
+.historyMeta {
+  color: #a8a29e;
+  font-size: 11px;
+}
+
+.historyDone {
+  flex-shrink: 0;
+  color: #15803d;
+}
+
+.historyFailed {
+  flex-shrink: 0;
+  color: #b91c1c;
+}
+
 .section {
   margin-bottom: 24px;
 }
@@ -162,4 +281,15 @@
   height: 1px;
   background: rgba(28, 25, 23, 0.06);
   margin: 28px 0;
+}
+
+@media (max-width: 560px) {
+  .historyHeader {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .historyList {
+    grid-template-columns: 1fr;
+  }
 }

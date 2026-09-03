@@ -17,6 +17,8 @@ export interface ResearchDocument {
   pageCount: number | null;
   extractedText: string;
   parseStatus: string;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 function ensureDir(dir: string): void {
@@ -61,7 +63,7 @@ export function loadResearchDocument(userId: number, documentId: string): Resear
   const row = getDb()
     .prepare(
       `SELECT document_id, user_id, content_hash, original_name, stored_path,
-              page_count, extracted_text, parse_status
+              page_count, extracted_text, parse_status, created_at, updated_at
        FROM research_documents
        WHERE user_id = ? AND document_id = ?`,
     )
@@ -76,7 +78,35 @@ export function loadResearchDocument(userId: number, documentId: string): Resear
     pageCount: row.page_count == null ? null : Number(row.page_count),
     extractedText: String(row.extracted_text ?? ''),
     parseStatus: String(row.parse_status ?? 'uploaded'),
+    createdAt: row.created_at ? String(row.created_at) : null,
+    updatedAt: row.updated_at ? String(row.updated_at) : null,
   };
+}
+
+export function listResearchDocuments(userId: number, limit = 50): ResearchDocument[] {
+  const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
+  const rows = getDb()
+    .prepare(
+      `SELECT document_id, user_id, content_hash, original_name, stored_path,
+              page_count, extracted_text, parse_status, created_at, updated_at
+       FROM research_documents
+       WHERE user_id = ?
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`,
+    )
+    .all(userId, safeLimit) as Array<Record<string, unknown>>;
+  return rows.map((row) => ({
+    documentId: String(row.document_id),
+    userId: Number(row.user_id),
+    contentHash: String(row.content_hash),
+    originalName: String(row.original_name ?? ''),
+    storedPath: String(row.stored_path),
+    pageCount: row.page_count == null ? null : Number(row.page_count),
+    extractedText: String(row.extracted_text ?? ''),
+    parseStatus: String(row.parse_status ?? 'uploaded'),
+    createdAt: row.created_at ? String(row.created_at) : null,
+    updatedAt: row.updated_at ? String(row.updated_at) : null,
+  }));
 }
 
 export function updateResearchDocumentText(

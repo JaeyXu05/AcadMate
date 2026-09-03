@@ -18,7 +18,7 @@ let db: Database.Database;
 // ============================================================================
 
 /** 当前期望的 schema 版本（每新增一个迁移步骤 +1） */
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 
 const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS report_preferences (
@@ -284,6 +284,29 @@ const PAPER_SEARCH_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_paper_search_sessions_user
         ON paper_search_sessions(user_id, created_at DESC);
+`;
+
+const PDF_ANALYSIS_DDL = `
+      CREATE TABLE IF NOT EXISTS pdf_analysis_jobs (
+        job_id       TEXT PRIMARY KEY,
+        user_id      INTEGER NOT NULL,
+        document_id  TEXT NOT NULL,
+        filename     TEXT NOT NULL DEFAULT '',
+        status       TEXT NOT NULL DEFAULT 'queued',
+        result_json  TEXT,
+        error        TEXT,
+        created_at   TEXT DEFAULT (datetime('now', 'localtime')),
+        started_at   TEXT,
+        completed_at TEXT,
+        updated_at   TEXT DEFAULT (datetime('now', 'localtime')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_pdf_analysis_jobs_user
+        ON pdf_analysis_jobs(user_id, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_pdf_analysis_jobs_active
+        ON pdf_analysis_jobs(user_id, document_id, status);
 `;
 
 /** 按版本号递增的迁移步骤；下标 = 目标版本（第 n 步把库升到 n）。只允许 SQLite 支持的 DDL。 */
@@ -677,6 +700,10 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     version: 19,
     sql: `UPDATE email_accounts SET imap_same_as_smtp = 0 WHERE imap_same_as_smtp = 1;`,
   },
+  {
+    version: 20,
+    sql: PDF_ANALYSIS_DDL,
+  },
 ];
 
 /**
@@ -736,6 +763,7 @@ export function ensureProductivitySchema(database: Database.Database): void {
   database.exec(SKILL_DDL);
   database.exec(INTEGRATIONS_DDL);
   database.exec(PAPER_SEARCH_DDL);
+  database.exec(PDF_ANALYSIS_DDL);
 }
 
 export function getDb(): Database.Database {

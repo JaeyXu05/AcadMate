@@ -5,10 +5,10 @@ import os from 'os';
 import fs from 'fs';
 import { promisify } from 'util';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
-import { persistUploadedPdf, loadResearchDocument, updateResearchDocumentText } from '../data/researchDocuments';
+import { persistUploadedPdf, loadResearchDocument, listResearchDocuments } from '../data/researchDocuments';
+import { createPdfAnalysisJob, findActivePdfAnalysisJob, getPdfAnalysisJob, listPdfAnalysisJobs } from '../data/pdfAnalysisJobs';
 import { appendGrowthEvent } from '../data/growthStore';
-import { extractPdfPages, buildSummary, buildKeyPoints, type StructuredPdfAnalysis } from './pdfText';
-import { pdfGrowthPatch, isNumericRunId, runHarnessSkill, agentBase, probeAgent, explainAgentError } from '../harnessClient';
+import { processPdfAnalysisJob, processPdfBatchAnalysisJob } from '../services/pdfAnalysis';
 
 const unlink = promisify(fs.unlink);
 
@@ -125,32 +125,6 @@ interface AnalyzeBody {
   document_id?: string;
 }
 
-function analysisBudget(pages: Array<{ page: number; text: string }>): Array<{ page: number; text: string }> {
-  const maxPagesRaw = Number(process.env.PDF_MAX_ANALYSIS_PAGES || 64);
-  const maxCharsRaw = Number(process.env.PDF_MAX_ANALYSIS_CHARS || 120000);
-  const maxPages = Number.isFinite(maxPagesRaw) ? Math.max(8, Math.min(200, Math.floor(maxPagesRaw))) : 64;
-  const maxChars = Number.isFinite(maxCharsRaw) ? Math.max(20000, Math.min(500000, Math.floor(maxCharsRaw))) : 120000;
-  if (pages.length <= maxPages && pages.reduce((sum, page) => sum + page.text.length, 0) <= maxChars) return pages;
-
-  // 保留首页（标题/摘要）和末页（结论），中间页按原顺序截断，避免把
-  // 大型论文的全部正文一次性放进 AgentRun context。
-  const selected = pages.length > maxPages
-    ? [...pages.slice(0, Math.max(1, maxPages - 2)), ...pages.slice(-2)]
-    : [...pages];
-  let remaining = maxChars;
-  return selected.map((page) => {
-    if (remaining <= 0) return { page: page.page, text: '' };
-    const text = page.text.slice(0, remaining);
-    remaining -= text.length;
-    return { page: page.page, text };
-  }).filter((page) => page.text.trim());
-}
-
-function pdfAgentTimeoutMs(): number {
-  const configured = Number(process.env.PDF_AGENT_TIMEOUT_MS || 360000);
-  return Number.isFinite(configured) ? Math.max(30_000, Math.min(configured, 480_000)) : 360000;
-}
-
 pdfRouter.post('/analyze', async (req: AuthRequest, res: Response) => {
   const body = (req.body ?? {}) as AnalyzeBody;
   const documentId = body.document_id || body.upload_id;
@@ -168,118 +142,86 @@ pdfRouter.post('/analyze', async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  if (!agentBase()) {
-    res.status(503).json({
-      message: 'PDF 分析需要 A 端 Mentor Agent（MENTOR_AGENT_BASE_URL）。当前未配置，上传已保存，请启动 A 端后再点「开始分析」。',
+  const active = findActivePdfAnalysisJob(req.userId!, record.documentId);
+  if (active) {
+    res.status(202).json({
+      job_id: active.jobId,
+      status: active.status,
+      document_id: active.documentId,
+      filename: active.filename,
     });
     return;
   }
-  const reachable = await probeAgent(2500);
-  if (!reachable) {
-    res.status(503).json({
-      message: `Mentor Agent 未启动或无法连接（${agentBase()}）。PDF 已保存在本服务；分析需要先启动 A 端后再点「开始分析」。`,
-    });
+  const job = createPdfAnalysisJob(req.userId!, record.documentId, record.originalName);
+  // 分析任务独立于 HTTP 请求运行；页面离开、刷新或切换路由都不会取消它。
+  void processPdfAnalysisJob(job.jobId, req.userId!, record.documentId);
+  res.status(202).json({
+    job_id: job.jobId,
+    status: job.status,
+    document_id: job.documentId,
+    filename: job.filename,
+  });
+});
+
+interface AnalyzeBatchBody {
+  upload_ids?: string[];
+  document_ids?: string[];
+}
+
+pdfRouter.post('/analyze-batch', async (req: AuthRequest, res: Response) => {
+  const body = (req.body ?? {}) as AnalyzeBatchBody;
+  const rawIds = body.document_ids?.length ? body.document_ids : (body.upload_ids ?? []);
+  const documentIds = [...new Set(rawIds.filter((id) => typeof id === 'string' && id.trim()))];
+  if (documentIds.length < 2) {
+    res.status(400).json({ message: '合并分析至少需要选择 2 篇 PDF' });
+    return;
+  }
+  if (documentIds.length > 20) {
+    res.status(400).json({ message: '一次合并分析最多支持 20 篇 PDF' });
     return;
   }
 
-  const pages = await extractPdfPages(record.storedPath);
-  const docText = pages.map((page) => page.text).join('\n');
-  if (!pages.length || !docText.trim()) {
-    updateResearchDocumentText(record.documentId, '', null, 'empty_text');
-    res.status(422).json({
-      message: '未能从 PDF 抽取正文。该文件可能是扫描件、图片 PDF 或已加密；系统不会用二进制文本或文件名冒充智能体分析结果。',
-    });
-    return;
-  }
-  if (docText && docText !== record.extractedText) {
-    updateResearchDocumentText(record.documentId, docText, pages.length, docText ? 'parsed' : 'empty_text');
-  }
-
-  try {
-    const pagesForAnalysis = analysisBudget(pages);
-    const result = await runHarnessSkill({
-      userId: req.userId!,
-      skillId: 'pdf_analyze',
-      message: `分析文档 ${record.originalName}`,
-      query: record.documentId,
-      timeoutMs: pdfAgentTimeoutMs(),
-      context: {
-        document_id: record.documentId,
-        pages: pagesForAnalysis,
-        source_page_count: pages.length,
-      },
-      patcher: (runId, payload) => pdfGrowthPatch(runId, record.documentId, payload),
-    });
-    const advisors = Array.isArray(result?.artifact?.advisors) ? result.artifact.advisors : [];
-    const suggestedAdvisors = advisors.map((item: any) => ({
-      id: String(item.id || ''),
-      name: String(item.name || ''),
-      title: String(item.title || ''),
-      department: String(item.department || ''),
-      tags: Array.isArray(item.tags) ? item.tags : [],
-      papers: Number(item.papers || 0),
-      matchScore: Number(item.matchScore || 0),
-      explanation: item.explanation,
-      evidenceRefs: item.evidenceRefs,
-      scoreKind: String(item.scoreKind || 'dense_semantic_llm_rerank'),
-    }));
-    const reviewStatus = String(result?.review_status || 'NEED_MORE_INPUT');
-    const analysis = result?.artifact?.analysis && typeof result.artifact.analysis === 'object'
-      ? result.artifact.analysis as StructuredPdfAnalysis
-      : undefined;
-    if (reviewStatus !== 'PASS' || !analysis) {
-      const detail = String(result?.artifact?.error || `Review ${reviewStatus}`);
-      appendGrowthEvent(req.userId!, {
-        verb: 'analyze_blocked',
-        objectType: 'document',
-        objectId: record.documentId,
-        result: { review_status: reviewStatus, run_id: result?.run_id, error: detail },
-        context: { evidence_refs: result?.evidence_refs ?? [] },
-        sourceRunId: isNumericRunId(String(result?.run_id || '')) ? String(result.run_id) : null,
-        sourceSkillId: 'pdf_analyze',
-      });
-      res.status(/timeout|timed out/i.test(detail) ? 504 : 502).json({
-        message: `PDF 智能体未产出通过审核的分析：${detail}`,
-        run_id: result?.run_id,
-        review_status: reviewStatus,
-        retryable: true,
-      });
+  for (const documentId of documentIds) {
+    const record = loadResearchDocument(req.userId!, documentId);
+    if (!record) {
+      res.status(404).json({ message: `所选文档不存在或不属于当前用户：${documentId}` });
       return;
     }
-    const summary = buildSummary(docText, [], record.originalName, suggestedAdvisors.length, {
-      reviewStatus,
-      analysis,
-    });
-    const keyPoints = buildKeyPoints(docText, [], [], [], {
-      reviewStatus,
-      advisors: suggestedAdvisors,
-      error: result?.artifact?.error,
-      analysis,
-    });
-    appendGrowthEvent(req.userId!, {
-      verb: reviewStatus === 'PASS' ? 'analyzed' : 'analyze_blocked',
-      objectType: 'document',
-      objectId: record.documentId,
-      result: { review_status: reviewStatus, run_id: result?.run_id, advisor_ids: suggestedAdvisors.map((item: any) => item.id) },
-      context: { evidence_refs: result?.evidence_refs ?? [] },
-      sourceRunId: isNumericRunId(String(result?.run_id || '')) ? String(result.run_id) : null,
-      sourceSkillId: 'pdf_analyze',
-    });
-    res.json({
-      summary,
-      keyPoints,
-      suggestedAdvisors,
-      document_id: record.documentId,
-      content_hash: record.contentHash,
-      run_id: result?.run_id,
-      review_status: reviewStatus,
-      evidence_refs: result?.evidence_refs ?? [],
-      scoreKind: suggestedAdvisors[0]?.scoreKind || 'dense_semantic_llm_rerank',
-    });
-  } catch (err: any) {
-    const explained = explainAgentError(err, 'PDF 分析需要 A 端 Harness，当前无法完成。');
-    res.status((explained as Error & { status?: number }).status || 503).json({
-      message: explained.message,
-    });
+    if (!fs.existsSync(record.storedPath)) {
+      res.status(404).json({ message: `文档文件缺失，请重新上传：${record.originalName}` });
+      return;
+    }
   }
+
+  const active = documentIds
+    .map((documentId) => findActivePdfAnalysisJob(req.userId!, documentId))
+    .find((job) => Boolean(job));
+  if (active) {
+    res.status(202).json({ jobs: [active] });
+    return;
+  }
+
+  const jobs = documentIds.map((documentId) => {
+    const record = loadResearchDocument(req.userId!, documentId)!;
+    return createPdfAnalysisJob(req.userId!, documentId, record.originalName);
+  });
+  void processPdfBatchAnalysisJob(jobs.map((job) => job.jobId), req.userId!, documentIds);
+  res.status(202).json({ jobs });
+});
+
+pdfRouter.get('/jobs', (req: AuthRequest, res: Response) => {
+  res.json({ items: listPdfAnalysisJobs(req.userId!) });
+});
+
+pdfRouter.get('/documents', (req: AuthRequest, res: Response) => {
+  res.json({ items: listResearchDocuments(req.userId!) });
+});
+
+pdfRouter.get('/jobs/:jobId', (req: AuthRequest, res: Response) => {
+  const job = getPdfAnalysisJob(req.userId!, req.params.jobId);
+  if (!job) {
+    res.status(404).json({ message: '分析任务不存在' });
+    return;
+  }
+  res.json(job);
 });

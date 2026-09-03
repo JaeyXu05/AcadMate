@@ -19,14 +19,16 @@ interface PdfUploaderProps {
  */
 function PdfUploader({ onUploaded, onUploadingChange, uploadFn }: PdfUploaderProps) {
   const { message } = App.useApp();
-  const [uploading, setUploading] = useState(false);
+  const [uploadingCount, setUploadingCount] = useState(0);
+  const uploading = uploadingCount > 0;
 
   const uploadProps: UploadProps = {
     name: 'file',
-    multiple: false,
-    maxCount: 1,
+    multiple: true,
+    maxCount: 20,
     accept: 'application/pdf,.pdf',
-    showUploadList: true,
+    // 文件统一显示在 PdfPage 的“PDF 历史记录”里，避免 Upload 内部列表只保留当前一次选择。
+    showUploadList: false,
     beforeUpload: (file) => {
       // 校验类型
       const isPdf =
@@ -44,7 +46,7 @@ function PdfUploader({ onUploaded, onUploadingChange, uploadFn }: PdfUploaderPro
     },
     customRequest: async (options) => {
       const { file, onSuccess, onError } = options;
-      setUploading(true);
+      setUploadingCount((count) => count + 1);
       onUploadingChange?.(true);
       try {
         const res = uploadFn
@@ -64,7 +66,7 @@ function PdfUploader({ onUploaded, onUploadingChange, uploadFn }: PdfUploaderPro
             : undefined;
         message.error(msg ?? '上传失败，请重试');
       } finally {
-        setUploading(false);
+        setUploadingCount((count) => Math.max(0, count - 1));
         onUploadingChange?.(false);
       }
     },
@@ -79,7 +81,7 @@ function PdfUploader({ onUploaded, onUploadingChange, uploadFn }: PdfUploaderPro
       </Upload>
       <div className="mt-2 text-[13px] text-slate-500">
         <File size={14} strokeWidth={1.5} className="mr-1.5 inline text-slate-600" />
-        支持 PDF 格式，单文件不超过 20MB
+        支持同时选择多个 PDF，单文件不超过 20MB
       </div>
     </div>
   );
