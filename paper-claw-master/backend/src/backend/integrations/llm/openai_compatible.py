@@ -57,4 +57,15 @@ class OpenAICompatibleChatModelAdapter:
         response = client.chat.completions.create(**kwargs)
         if not response.choices:
             raise RuntimeError("Chat model returned no choices.")
-        return str(response.choices[0].message.content or "")
+        message = response.choices[0].message
+        text = str(message.content or "")
+        if not text.strip():
+            # Some OpenAI-compatible reasoning gateways put the whole completion
+            # in `reasoning_content` and leave `content` empty (for example the
+            # USTC glm-5.2-107 gateway in JSON mode).  Treat that field as a
+            # fallback so structured calls never see an empty response.
+            extra = getattr(message, "model_extra", None) or {}
+            text = str(extra.get("reasoning_content") or "")
+            if not text.strip():
+                text = str(getattr(message, "reasoning_content", "") or "")
+        return text

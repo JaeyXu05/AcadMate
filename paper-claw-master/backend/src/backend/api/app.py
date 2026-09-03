@@ -64,7 +64,13 @@ def _readiness_payload() -> dict[str, object]:
     chat_configured = bool(
         settings.chat_api_key and settings.chat_base_url and settings.chat_model
     )
-    chat_reachable, chat_error = _chat_readiness()
+    # Deterministic local RAG is the default deployment mode and does not need
+    # a chat gateway. Only model-backed reasoning makes chat readiness a hard
+    # dependency for the service.
+    if settings.mentor_workflow_model_reasoning_enabled:
+        chat_reachable, chat_error = _chat_readiness()
+    else:
+        chat_reachable, chat_error = True, None
     ready = database_ok and chat_reachable
     return {
         "status": "ready" if ready else "not_ready",

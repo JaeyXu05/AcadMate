@@ -1,8 +1,9 @@
 """Evidence-first PDF mentor analysis.
 
 Pipeline (PaperQA2-inspired): page passages -> multilingual dense recall ->
-structured model reranking -> evidence validation -> Review. There is no
-lexical/keyword fallback in this skill.
+structured model reranking (with a local semantic fallback when no chat model
+is configured) -> evidence validation -> Review. There is no lexical/keyword
+fallback in this skill.
 """
 
 from __future__ import annotations
@@ -19,14 +20,15 @@ from backend.db.types import RunStatus, WorkflowName
 from backend.harness.contracts import RunCreate, RunCreated
 from backend.harness.runtime import suggest_next_skill
 from backend.integrations.llm.openai_compatible import OpenAICompatibleChatModelAdapter
+from backend.schemas import ProviderResolutionError
 from backend.services.mentor_semantic_retrieval import SemanticMentorHit, get_mentor_semantic_index
 from backend.services.providers import chat_provider_from_settings
 from backend.settings import get_settings
 from backend.tools.context import tool_session
 
-_MAX_PASSAGES = 12
+_MAX_PASSAGES = 48
 _PASSAGE_CHARS = 520
-_MAX_RECALL = 6
+_MAX_RECALL = 20
 _MIN_FIT_SCORE = 60
 
 
@@ -191,13 +193,27 @@ def pdf_analyze_result(run_id: int, session: Session) -> RunCreated:
 
 def _rerank_with_model(request: RunCreate, passages: list[dict[str, Any]], hits: list[SemanticMentorHit]) -> PdfResearchAnalysis:
     settings = get_settings()
-    provider = chat_provider_from_settings(settings).model_copy(deep=True)
+    try:
+        provider = chat_provider_from_settings(settings).model_copy(deep=True)
+    except ProviderResolutionError as exc:
+        # PDF mentor analysis must remain usable in the default offline setup.
+        # Dense semantic recall is already local; only the optional second-pass
+        # LLM reranker is unavailable when the chat model has not been filled in.
+        # Do not hide other provider/configuration errors (for example an
+        # unreachable configured endpoint), because those need user attention.
+        if exc.error.code != "chat_model_missing":
+            raise
+        return _rerank_without_model(request, passages, hits)
     provider.settings = {
         **provider.settings,
-        "max_tokens": min(settings.chat_max_tokens, 1800),
-        "timeout": min(float(provider.settings.get("timeout") or 60), 60),
-        "max_retries": 0,
+        "max_tokens": settings.chat_max_tokens,
+        "timeout": float(provider.settings.get("timeout") or settings.chat_timeout_seconds),
+        "max_retries": int(provider.settings.get("max_retries") or settings.chat_max_retries),
         "response_format": {"type": "json_object"},
+        # glm-5.2-107 默认先输出长段 reasoning_content；思考占满输出预算时
+        # content 会为空导致结构化校验失败。PDF 重排是固定 JSON 任务，
+        # 关闭思考模式后结果直接进入 content，更快也更稳定。
+        "extra_body": {"thinking": {"type": "disabled"}},
     }
     candidates = []
     for hit in hits:
@@ -206,9 +222,10 @@ def _rerank_with_model(request: RunCreate, passages: list[dict[str, Any]], hits:
             "candidate_id": candidate.candidate_id,
             "mentor_name": candidate.mentor_name,
             "department": candidate.department,
-            "research_topics": candidate.research_topics[:6],
-            "methods": [],
-            "publications": [],
+            "academic_title": candidate.source_metadata.get("academic_title") or "",
+            "research_topics": candidate.research_topics[:10],
+            "methods": candidate.methods[:12],
+            "publications": candidate.publications[:5],
             "dense_recall_score": round(hit.score, 6),
             # The complete passage packet is already supplied once below.  IDs
             # avoid repeating the same PDF text for every recalled mentor.
@@ -236,6 +253,57 @@ def _rerank_with_model(request: RunCreate, passages: list[dict[str, Any]], hits:
     return _parse_json_model(raw, PdfResearchAnalysis)
 
 
+def _rerank_without_model(
+    request: RunCreate,
+    passages: list[dict[str, Any]],
+    hits: list[SemanticMentorHit],
+) -> PdfResearchAnalysis:
+    """Produce an auditable local result when the optional chat model is absent.
+
+    This is deliberately conservative: it only reuses the dense-recall order,
+    verified candidate fields, and PDF page references. It does not infer new
+    research claims or pretend that an LLM review was performed.
+    """
+    page_numbers = list(dict.fromkeys(int(item["page"]) for item in passages))
+    first_text = " ".join(str(item.get("text") or "").strip() for item in passages[:3]).strip()
+    if len(first_text) > 320:
+        first_text = first_text[:320].rstrip() + "…"
+    document_summary = (
+        f"已抽取 PDF 正文 {len(page_numbers)} 页，并使用本地多语种语义检索完成导师候选排序。"
+        + (f"材料开头摘要：{first_text}" if first_text else "")
+    )
+    decisions: list[PdfMentorDecision] = []
+    for hit in hits:
+        candidate = hit.candidate
+        allowed_pages = list(dict.fromkeys(
+            int(passages[index]["page"])
+            for index in hit.segment_indexes
+            if 0 <= index < len(passages)
+        ))
+        # Cosine similarity is in [-1, 1]. Keep the score conservative while
+        # preserving the existing absolute-fit validation threshold.
+        fit_score = max(0.0, min(100.0, 50.0 + max(0.0, hit.score) * 50.0))
+        topics = [topic for topic in candidate.research_topics[:3] if topic.strip()]
+        decisions.append(PdfMentorDecision(
+            candidate_id=candidate.candidate_id,
+            fit_score=round(fit_score, 2),
+            rationale=(
+                "本地多语种语义相似度排序；候选已核验研究方向为："
+                + ("、".join(topics) if topics else "未提供")
+                + "。该结果未经过聊天模型重排。"
+            ),
+            matched_capabilities=topics,
+            page_numbers=allowed_pages[:3],
+            uncertainties=["未配置聊天模型，未执行 LLM 重排；请结合导师主页和 PDF 原文人工复核。"],
+        ))
+    return PdfResearchAnalysis(
+        document_summary=document_summary,
+        research_directions=[],
+        methods=[],
+        decisions=decisions,
+    )
+
+
 def _validated_advisors(
     analysis: PdfResearchAnalysis,
     hits: list[SemanticMentorHit],
@@ -253,9 +321,10 @@ def _validated_advisors(
         hit = hit_by_id.get(decision.candidate_id)
         if hit is None or decision.candidate_id in seen or decision.fit_score < _MIN_FIT_SCORE:
             continue
-        # Inferred paper topics are not authoritative research interests. They may
-        # explain a verified profile but cannot qualify a candidate by themselves.
-        if int(hit.candidate.source_metadata.get("topics_source") or 0) != 1:
+        # 研究方向必须来自官方 profile(1) 或论文标题回填(2)：这两类都代表候选
+        # 导师确有可检索的研究方向。完全没有方向的导师（topics_source=0）不进入
+        # 最终名单，避免仅靠院系/泛词相似产生无依据的推荐。
+        if int(hit.candidate.source_metadata.get("topics_source") or 0) not in (1, 2):
             continue
         seen.add(decision.candidate_id)
         allowed_pages = list(dict.fromkeys(int(passages[index]["page"]) for index in hit.segment_indexes))
@@ -359,7 +428,8 @@ def _persist(
         "retrieval": {
             "mode": "dense_multilingual",
             "embedding_model": settings.embedding_model,
-            "reranker_model": settings.chat_model,
+            "reranker_model": settings.chat_model or "deterministic_local_semantic",
+            "reranker_mode": "llm" if settings.chat_model else "local_semantic_fallback",
             "keyword_fallback": False,
         },
         "analysis": analysis,
