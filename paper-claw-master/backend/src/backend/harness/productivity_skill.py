@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, ValidationError
@@ -61,6 +61,30 @@ class ProgressReportDraft(BaseModel):
     missing_information: list[str] = Field(default_factory=list)
 
 
+class PlanMilestone(BaseModel):
+    sequence: int = Field(ge=1, le=12)
+    source_plan_id: int | None = None
+    title: str = Field(min_length=1, max_length=160)
+    objective: str = Field(min_length=1, max_length=600)
+    deliverable: str = Field(min_length=1, max_length=300)
+    acceptance_criteria: list[str] = Field(min_length=1, max_length=4)
+    priority: Literal["low", "medium", "high"] = "medium"
+    estimated_minutes: int = Field(ge=15, le=480)
+    start_at: str | None = None
+    due_at: str | None = None
+    reminder_at: str | None = None
+    rationale: str = Field(min_length=1, max_length=500)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class PlanCoachDraft(BaseModel):
+    planning_summary: str = Field(min_length=30, max_length=900)
+    capacity_assessment: str = Field(min_length=20, max_length=700)
+    personalization_basis: list[str] = Field(default_factory=list, max_length=6)
+    milestones: list[PlanMilestone] = Field(min_length=1, max_length=8)
+    risks: list[str] = Field(default_factory=list, max_length=6)
+
+
 _RUNTIME_LINE = re.compile(
     r"^(?:WORKFLOW_|Harness\s|已收到需求|意图已确认|正在规划|计划已生成|"
     r"开始领域分析|领域判断完成|导师研究\s*Agent|查询约束已冻结|"
@@ -68,6 +92,64 @@ _RUNTIME_LINE = re.compile(
     r"匹配\s*Agent|匹配完成|独立审核|审核通过|本轮多智能体任务完成)",
     flags=re.IGNORECASE,
 )
+
+_INTERNAL_TEXT_TERMS = (
+    "input_snapshot",
+    "activity_records",
+    "plan_records",
+    "dialogue_records",
+    "growth_state",
+    "matched_mentors",
+    "read_papers",
+    "research_tasks",
+    "verified_experiences",
+)
+_LOCAL_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|(?:\.\.?)[\\/])[^\s，。；、）\])]+")
+
+# Sending Pydantic's complete JSON schema accounted for most of the prompt
+# tokens while adding little instruction value.  Keep the output contract
+# compact, then validate the response with the strict models above.
+_PLAN_OUTPUT_CONTRACT = {
+    "planning_summary": "string", "capacity_assessment": "string",
+    "personalization_basis": ["string"], "risks": ["string"],
+    "milestones": [{"sequence": 1, "source_plan_id": "integer|null", "title": "string",
+        "objective": "string", "deliverable": "string", "acceptance_criteria": ["string"],
+        "priority": "low|medium|high", "estimated_minutes": 60,
+        "start_at": "YYYY-MM-DDTHH:MM|null", "due_at": "YYYY-MM-DDTHH:MM|null",
+        "reminder_at": "YYYY-MM-DDTHH:MM|null", "rationale": "string", "evidence_refs": ["allowed ref"]}],
+}
+_REPORT_OUTPUT_CONTRACT = {
+    "executive_summary": "string", "progress_assessment": "string",
+    "completed_work": [{"title": "string", "fact": "string", "significance": "string", "evidence_refs": ["allowed ref"]}],
+    "work_in_progress": [{"title": "string", "fact": "string", "significance": "string", "evidence_refs": ["allowed ref"]}],
+    "blockers": [{"issue": "string", "impact": "string", "proposed_resolution": "string", "evidence_refs": ["allowed ref"]}],
+    "discussion_insights": [{"title": "string", "fact": "string", "significance": "string", "evidence_refs": ["allowed ref"]}],
+    "next_actions": [{"action": "string", "rationale": "string", "deliverable": "string", "acceptance_criteria": ["string"], "priority": "low|medium|high", "target_date": "YYYY-MM-DD|null", "evidence_refs": ["allowed ref"]}],
+    "risks": ["string"], "missing_information": ["string"],
+}
+
+
+def _record_stage(session: Session, run_id: int | None, stage: str, progress: int, message: str, *, level: str = "info") -> None:
+    """Expose semantic progress only; never persist model reasoning traces."""
+    if run_id is None:
+        return
+    try:
+        AgentRunRepository(session).append_event(
+            run_id, "productivity_stage", level=level,
+            payload_json={"stage": stage, "progress": progress, "message": message},
+        )
+        session.commit()
+    except Exception:  # SQLite-only unit tests do not support PostgreSQL advisory locks.
+        session.rollback()
+
+
+def _audit_context(request: RunCreate) -> dict[str, Any]:
+    return {
+        "input_fingerprint": request.context.input_fingerprint,
+        "input_audit": request.context.input_audit,
+        "history_summary_present": bool(request.context.personal_harness_summary),
+        "history_evidence_refs": _collect_evidence_refs(request.context.personal_harness_summary),
+    }
 
 
 def queue_progress_report(request: RunCreate, session: Session) -> RunCreated:
@@ -83,6 +165,7 @@ def queue_progress_report(request: RunCreate, session: Session) -> RunCreated:
             "metadata": {
                 "harness_skill_id": "progress_report",
                 "period_type": period,
+                **_audit_context(request),
             },
         },
         output_json={
@@ -98,6 +181,7 @@ def queue_progress_report(request: RunCreate, session: Session) -> RunCreated:
         },
     )
     session.commit()
+    _record_stage(session, run.id, "queued", 5, "报告任务已排队，正在准备本周期资料")
     return RunCreated(
         run_id=str(run.id),
         skill_id="progress_report",
@@ -119,12 +203,17 @@ def start_progress_report(
     *,
     run_id: int | None = None,
 ) -> RunCreated:
+    if run_id is not None:
+        AgentRunRepository(session).update_status(run_id, RunStatus.running.value)
+        session.commit()
+    _record_stage(session, run_id, "loading_context", 15, "正在汇总本周期已记录的科研活动")
     context = request.context
     period = context.report_period or "weekly"
     events = [item for item in context.progress_events if isinstance(item, dict)]
     plans = [item for item in context.plans if isinstance(item, dict)]
     chats = [item for item in context.chat_summary if isinstance(item, dict)]
     growth = context.growth or {}
+    profile = context.profile or {}
     completed = [item for item in plans if item.get("status") == "done"]
     pending = [item for item in plans if item.get("status") in {"todo", "doing"}]
     evidence_refs = list(dict.fromkeys(
@@ -138,15 +227,21 @@ def start_progress_report(
     )
     metrics = {
         "activity_events": len(events),
-        "dialogue_turns": len(chats),
+        "completion_feedbacks": sum(
+            1 for item in completed if str(item.get("execution_notes") or "").strip()
+        ),
         "completed_plans": len(completed),
         "pending_plans": len(pending),
         "matched_mentors": len(growth.get("matched_mentors") or []),
         "read_papers": len(growth.get("read_papers") or []),
     }
     title = _report_title(period)
-    snapshot, source_refs = _report_snapshot(events, plans, chats, growth)
+    snapshot, source_refs = _report_snapshot(events, plans, chats, growth, profile)
+    if context.personal_harness_summary:
+        snapshot["个人科研历史摘要"] = context.personal_harness_summary
+        evidence_refs = list(dict.fromkeys([*evidence_refs, *_collect_evidence_refs(context.personal_harness_summary)]))
     evidence_refs = list(dict.fromkeys([*evidence_refs, *source_refs]))
+    _record_stage(session, run_id, "drafting", 45, "正在生成基于证据的报告草稿")
     try:
         draft, generation = _generate_report_draft(
             period=period,
@@ -154,38 +249,39 @@ def start_progress_report(
             metrics=metrics,
             snapshot=snapshot,
             allowed_evidence_refs=evidence_refs,
+            period_start=context.period_start or "",
+            period_end=context.period_end or "",
+            current_time=context.current_time or "",
+            timezone=context.timezone or "Asia/Shanghai",
         )
         draft = _restrict_evidence_refs(draft, set(evidence_refs))
+        draft = _humanize_report_draft(draft)
+        draft = _normalize_report_action_dates(
+            draft,
+            period_end=context.period_end or "",
+            current_time=context.current_time or "",
+        )
         markdown = _render_progress_markdown(title, period, metrics, draft)
         failed_checks = _review_report(markdown, draft)
-    except Exception as exc:  # noqa: BLE001 - persist an auditable agent failure
-        artifact = {
-            "type": "progress_report",
-            "period_type": period,
-            "title": title,
-            "markdown": "",
-            "metrics": metrics,
-            "evidence_refs": evidence_refs,
-            "generated_at": datetime.now(UTC).isoformat(),
-            "generation": {
-                "agent": "progress_report_agent",
-                "status": "failed",
-                "config_source": "environment_chat_config",
-            },
-            "failed_checks": ["model_generation_failed"],
-            "error": f"{type(exc).__name__}: {exc}",
-        }
-        return _persist_progress(
-            session,
-            request,
-            artifact,
-            evidence_refs,
-            status=RunStatus.failed.value,
-            review_status="FAILED",
-            run_id=run_id,
+    except Exception as exc:  # noqa: BLE001 - give the user an explicit, useful fallback
+        draft = _fallback_report_draft(plans, growth, current_time=context.current_time or "")
+        draft = _normalize_report_action_dates(
+            draft,
+            period_end=context.period_end or "",
+            current_time=context.current_time or "",
         )
+        markdown = _render_progress_markdown(title, period, metrics, draft)
+        fallback_checks = _review_report(markdown, draft)
+        failed_checks = ["model_generation_failed", *fallback_checks]
+        generation = {
+            "agent": "progress_report_agent",
+            "status": "fallback",
+            "reason": f"{type(exc).__name__}: {str(exc)[:300]}",
+            "error_type": type(exc).__name__,
+            "config_source": "deterministic_report_fallback",
+        }
 
-    review_status = "PASS" if not failed_checks else "REVISE"
+    review_status = "PASS" if not [item for item in failed_checks if item != "model_generation_failed"] else "REVISE"
     artifact = {
         "type": "progress_report",
         "period_type": period,
@@ -198,6 +294,7 @@ def start_progress_report(
         "failed_checks": failed_checks,
         "limitations": ["报告只汇总已记录活动；未记录的线下进展保持 unknown。"],
     }
+    _record_stage(session, run_id, "validating", 85, "正在核对证据引用与报告表达")
     return _persist_progress(
         session,
         request,
@@ -209,40 +306,401 @@ def start_progress_report(
     )
 
 
-def start_plan_coach(request: RunCreate, session: Session) -> RunCreated:
+def queue_plan_coach(request: RunCreate, session: Session) -> RunCreated:
+    run = AgentRunRepository(session).create(
+        WorkflowName.plan_coach.value,
+        status=RunStatus.pending.value,
+        input_json={"message": request.message, "metadata": {"harness_skill_id": "plan_coach", **_audit_context(request)}},
+        output_json={"review_status": "PENDING", "evidence_refs": [], "artifact": {"type": "plan_coach", "generation": {"agent": "plan_coach", "status": "queued"}}},
+    )
+    session.commit()
+    _record_stage(session, run.id, "queued", 5, "计划任务已排队，正在准备个人科研历史")
+    return productivity_result(run.id, session, WorkflowName.plan_coach.value, "plan_coach")
+
+
+def execute_plan_coach(run_id: int, request_payload: dict[str, Any]) -> None:
+    with tool_session() as session:
+        start_plan_coach(RunCreate.model_validate(request_payload), session, run_id=run_id)
+
+
+def start_plan_coach(request: RunCreate, session: Session, *, run_id: int | None = None) -> RunCreated:
+    if run_id is not None:
+        AgentRunRepository(session).update_status(run_id, RunStatus.running.value)
+        session.commit()
+    _record_stage(session, run_id, "loading_context", 12, "正在读取当前计划与个人科研历史")
     plans = [item for item in request.context.plans if isinstance(item, dict)]
     growth = request.context.growth or {}
-    pending_research = [
-        item for item in growth.get("research_tasks") or []
-        if isinstance(item, dict) and item.get("status") in {"pending", "in_progress"}
-    ]
-    suggestions: list[dict[str, Any]] = []
-    if len([item for item in plans if item.get("status") in {"todo", "doing"}]) > 5:
-        suggestions.append({"kind": "workload", "text": "当前开放计划超过 5 项，建议先冻结低优先级任务，保持每周最多 3 个核心交付。"})
-    if any(not item.get("due_at") for item in plans if item.get("status") != "done"):
-        suggestions.append({"kind": "deadline", "text": "部分计划缺少截止时间；建议补充可验证的日期与验收标准。"})
-    for task in pending_research[:3]:
-        suggestions.append({
-            "kind": "research_task",
-            "text": f"把研究任务“{task.get('title') or task.get('id')}”拆成一次 60–90 分钟的论文证据阅读与一次结论整理。",
-            "source_task_id": task.get("id"),
-            "evidence_refs": task.get("evidence_refs") or [],
-        })
-    if not suggestions:
-        suggestions.append({"kind": "focus", "text": "当前计划负荷可控；优先完成最早到期且有明确验收标准的一项。"})
-    evidence_refs = list(dict.fromkeys(
-        str(ref)
-        for item in suggestions
-        for ref in (item.get("evidence_refs") or [])
-        if str(ref)
-    ))
+    profile = request.context.profile or {}
+    current_time = request.context.current_time or datetime.now().strftime("%Y-%m-%dT%H:%M")
+    timezone = request.context.timezone or "Asia/Shanghai"
+    snapshot, evidence_refs = _plan_snapshot(plans, growth, profile, request.context.personal_harness_summary)
+    _record_stage(session, run_id, "assessing_scope", 30, "正在评估目标范围、时间预算与已有证据")
+    try:
+        _record_stage(session, run_id, "reasoning", 48, "正在推理阶段拆解、交付物和提醒时间")
+        draft, generation = _generate_plan_draft(
+            snapshot=snapshot,
+            allowed_evidence_refs=evidence_refs,
+            current_time=current_time,
+            timezone=timezone,
+        )
+        draft = _restrict_plan_evidence_refs(draft, set(evidence_refs))
+        draft = _humanize_plan_draft(draft)
+        draft = _normalize_plan_schedule(draft, plans, current_time)
+        failed_checks = _review_plan_draft(draft)
+        if failed_checks:
+            raise ValueError(", ".join(failed_checks))
+    except Exception as exc:  # noqa: BLE001 - return a usable, labelled fallback
+        draft = _fallback_plan_draft(plans, growth, current_time)
+        generation = {
+            "agent": "plan_coach",
+            "status": "fallback",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "config_source": "deterministic_plan_fallback",
+        }
+        failed_checks = ["model_plan_generation_failed"]
+    milestones = [item.model_dump() for item in draft.milestones]
+    _record_stage(session, run_id, "validating", 88, "正在校验阶段顺序、验收标准和提醒时间")
     artifact = {
         "type": "plan_coach",
-        "suggestions": suggestions,
+        "planning_summary": draft.planning_summary,
+        "capacity_assessment": draft.capacity_assessment,
+        "personalization_basis": draft.personalization_basis,
+        "milestones": milestones,
+        "plan_drafts": _plan_drafts_from_milestones(milestones, plans),
+        "suggestions": _plan_suggestions(draft),
+        "risks": draft.risks,
         "evidence_refs": evidence_refs,
         "generated_at": datetime.now(UTC).isoformat(),
+        "generation": generation,
+        "failed_checks": failed_checks,
     }
-    return _persist(session, request, WorkflowName.plan_coach.value, "plan_coach", artifact, evidence_refs)
+    return _persist(session, request, WorkflowName.plan_coach.value, "plan_coach", artifact, evidence_refs, run_id=run_id)
+
+
+def _plan_snapshot(
+    plans: list[dict[str, Any]],
+    growth: dict[str, Any],
+    profile: dict[str, Any],
+    personal_harness_summary: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    refs: list[str] = []
+    open_plans: list[dict[str, Any]] = []
+    for index, item in enumerate(
+        [row for row in plans if row.get("status") in {"todo", "doing"}][:12],
+        start=1,
+    ):
+        source_ref = f"plan:{item.get('id') or index}"
+        refs.append(source_ref)
+        open_plans.append(
+            {
+                "记录编号": source_ref,
+                "计划编号": item.get("id"),
+                "名称": str(item.get("title") or "")[:240],
+                "说明": str(item.get("description") or "")[:800],
+                "状态": item.get("status"),
+                "优先级": item.get("priority"),
+                "开始时间": item.get("start_at"),
+                "截止时间": item.get("due_at"),
+                "预计分钟": item.get("estimated_minutes"),
+                "实际分钟": item.get("actual_minutes"),
+                "已启用邮件提醒": bool(item.get("email_reminder")),
+            }
+        )
+    pending_tasks = [
+        _compact_value(item)
+        for item in growth.get("research_tasks") or []
+        if isinstance(item, dict) and item.get("status") in {"pending", "in_progress"}
+    ][:8]
+    refs.extend(_collect_evidence_refs(pending_tasks))
+    refs.extend(_collect_evidence_refs(personal_harness_summary or {}))
+    summary = _compact_value(personal_harness_summary or {})
+    return {
+        "当前开放计划": open_plans,
+        "已验证研究任务": pending_tasks,
+        "研究方向": _compact_value(growth.get("directions") or []),
+        "用户背景": {
+            "研究阶段": profile.get("grade") or "",
+            "专业": profile.get("major") or "",
+            "兴趣": _compact_value(profile.get("interests") or []),
+            "技能": _compact_value(profile.get("skills") or []),
+            "补充说明": str(profile.get("bio") or "")[:500],
+        },
+        "个人科研历史摘要": summary,
+    }, list(dict.fromkeys(str(ref) for ref in refs if str(ref)))
+
+
+def _generate_plan_draft(
+    *,
+    snapshot: dict[str, Any],
+    allowed_evidence_refs: list[str],
+    current_time: str,
+    timezone: str,
+) -> tuple[PlanCoachDraft, dict[str, Any]]:
+    settings = get_settings()
+    provider = chat_provider_from_settings(settings).model_copy(deep=True)
+    provider.settings = {
+        **provider.settings,
+        "max_tokens": min(settings.chat_max_tokens, settings.plan_chat_max_tokens),
+        "timeout": float(settings.plan_chat_timeout_seconds),
+        "max_retries": 0,
+        "response_format": {"type": "json_object"},
+        "extra_body": {
+            **(provider.settings.get("extra_body") or {}),
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+        },
+    }
+    system = """
+你是科研计划教练。你的职责是把学生已经记录的研究计划，转化为能真正执行、能验收、能提醒的短阶段任务。
+
+硬约束：
+1. 只能依据“规划资料”中的计划、研究任务和用户背景；资料未提供的经历、论文或成果不得补写。
+2. 必须先判断时间预算与目标范围是否匹配。目标过多或时间不足时，要明确建议缩小本轮范围或调整截止时间，不能笼统地说“负荷可控”。
+3. 每个里程碑必须是一次可以独立完成的工作时段，包含明确交付物和 1 至 4 条验收标准；避免“学习一下”“继续推进”等空话。
+4. 里程碑必须按执行顺序排列，并尽量关联已有计划编号。安排时间使用 YYYY-MM-DDTHH:MM；提醒时间应早于该阶段开始或截止时间。
+5. 优先拆解已有计划；没有开放计划时，才建议建立一个最小可验收计划。不得自动声称任务已经完成。
+6. 个性化依据只能说明实际使用到的计划、方向、专业、兴趣或技能；这些资料为空时，必须明确“当前资料不足”。
+7. 不得输出内部字段名、数据库术语、思维链或 Markdown 代码围栏。
+8. 只返回一个 JSON 对象，必须且只能包含 planning_summary、capacity_assessment、personalization_basis、milestones、risks；不要返回 current_time、规划资料、输出结构或本提示中的其他契约字段。
+9. milestones 必须是对象数组，每个对象包含 sequence、source_plan_id、title、objective、deliverable、acceptance_criteria、priority、estimated_minutes、start_at、due_at、reminder_at、rationale、evidence_refs。source_plan_id 只能是“可关联计划编号”中的整数，无法关联时必须为 null，绝不能填写计划名称、证据编号、"fallback" 或其他字符串。acceptance_criteria 必须是 1 至 4 条字符串组成的 JSON 数组，不能是单个字符串。
+10. 只要“当前开放计划”非空，milestones 必须至少有一项；personalization_basis 必须是 JSON 字符串数组，即使只有一条也必须用方括号包裹。
+""".strip()
+    payload = {
+        "当前时间": current_time,
+        "时区": timezone,
+        "可用证据编号": allowed_evidence_refs,
+        "可关联计划编号": [
+            item.get("计划编号")
+            for item in snapshot.get("当前开放计划") or []
+            if isinstance(item.get("计划编号"), int)
+        ],
+        "输出 JSON 结构": _PLAN_OUTPUT_CONTRACT,
+        "规划资料": snapshot,
+    }
+    raw = OpenAICompatibleChatModelAdapter().generate_text(
+        provider,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": "请基于以下资料生成阶段化执行计划。只返回目标字段 JSON，不要复述资料对象或字段名契约。\n" + json.dumps(payload, ensure_ascii=False)},
+        ],
+    )
+    try:
+        draft = _parse_json_model(raw, PlanCoachDraft)
+    except ValueError:
+        draft = _repair_plan_draft(provider, raw, snapshot, current_time, timezone)
+    generation = {
+        "agent": "plan_coach",
+        "status": "completed",
+        "config_source": "environment_chat_config",
+        "provider": provider.provider,
+        "model": provider.model,
+        "base_host": urlparse(provider.base_url or "").hostname,
+    }
+    return draft, generation
+
+
+def _repair_plan_draft(
+    provider: Any,
+    raw: str,
+    snapshot: dict[str, Any],
+    current_time: str,
+    timezone: str,
+) -> PlanCoachDraft:
+    """Repair only invalid model formatting; retain the primary deep plan call."""
+    repair_provider = provider.model_copy(deep=True)
+    repair_provider.settings = {
+        **repair_provider.settings,
+        "max_tokens": min(int(repair_provider.settings.get("max_tokens") or 2000), 2000),
+        "extra_body": {"thinking": {"type": "disabled"}, "reasoning_effort": "low"},
+    }
+    repair_prompt = {
+        "当前时间": current_time,
+        "时区": timezone,
+        "可关联计划编号": [
+            item.get("计划编号")
+            for item in snapshot.get("当前开放计划") or []
+            if isinstance(item.get("计划编号"), int)
+        ],
+        "输出 JSON 结构": _PLAN_OUTPUT_CONTRACT,
+        "开放计划": snapshot.get("当前开放计划") or [],
+        "待修复输出": raw[:8000],
+    }
+    repaired = OpenAICompatibleChatModelAdapter().generate_text(
+        repair_provider,
+        [
+            {"role": "system", "content": (
+                "你是 JSON 格式修复器。基于开放计划修复待修复输出，"
+                "只返回一个 JSON 对象，且只能包含 planning_summary、capacity_assessment、"
+                "personalization_basis、milestones、risks。personalization_basis 必须为字符串数组。"
+                "milestones 必须至少一项；每项必须包含 sequence、source_plan_id、title、objective、"
+                "deliverable、acceptance_criteria、priority、estimated_minutes、start_at、due_at、"
+                "reminder_at、rationale、evidence_refs。source_plan_id 只能为输入中的整数计划编号或 null；"
+                "acceptance_criteria 必须是字符串数组，不能是单个字符串。不得解释。"
+            )},
+            {"role": "user", "content": json.dumps(repair_prompt, ensure_ascii=False)},
+        ],
+    )
+    return _parse_json_model(repaired, PlanCoachDraft)
+
+
+def _restrict_plan_evidence_refs(
+    draft: PlanCoachDraft, allowed: set[str]
+) -> PlanCoachDraft:
+    cleaned = draft.model_copy(deep=True)
+    for item in cleaned.milestones:
+        item.evidence_refs = list(
+            dict.fromkeys(ref for ref in item.evidence_refs if ref in allowed)
+        )
+    return cleaned
+
+
+def _normalize_plan_schedule(
+    draft: PlanCoachDraft,
+    plans: list[dict[str, Any]],
+    current_time: str,
+) -> PlanCoachDraft:
+    """Fill missing scheduling details and prevent already-expired reminders."""
+
+    normalized = draft.model_copy(deep=True)
+    now = _parse_local_datetime(current_time) or datetime.now()
+    plan_by_id = {int(item["id"]): item for item in plans if item.get("id") is not None}
+    cursor = now + timedelta(minutes=5)
+    for sequence, item in enumerate(normalized.milestones, start=1):
+        item.sequence = sequence
+        if item.source_plan_id not in plan_by_id:
+            item.source_plan_id = None
+        source = plan_by_id.get(item.source_plan_id or -1)
+        parent_due = _parse_local_datetime(source.get("due_at")) if source else None
+        start = _parse_local_datetime(item.start_at) or cursor
+        if start < cursor:
+            start = cursor
+        requested_due = _parse_local_datetime(item.due_at)
+        minimum_due = start + timedelta(minutes=item.estimated_minutes)
+        due = requested_due if requested_due and requested_due >= minimum_due else minimum_due
+        if parent_due and due > parent_due:
+            normalized.risks.append(
+                f"“{item.title}”按当前预计时长将超过原计划截止时间；请缩小范围或调整总计划时间。"
+            )
+        reminder = _parse_local_datetime(item.reminder_at)
+        if reminder is None or reminder >= start or reminder < now:
+            reminder = max(now + timedelta(minutes=1), start - timedelta(minutes=15))
+        item.start_at = _format_local_datetime(start)
+        item.due_at = _format_local_datetime(due)
+        item.reminder_at = _format_local_datetime(reminder)
+        cursor = due + timedelta(minutes=5)
+    normalized.risks = list(dict.fromkeys(normalized.risks))[:6]
+    return normalized
+
+
+def _fallback_plan_draft(
+    plans: list[dict[str, Any]],
+    growth: dict[str, Any],
+    current_time: str,
+) -> PlanCoachDraft:
+    open_plans = [item for item in plans if item.get("status") in {"todo", "doing"}]
+    milestones: list[PlanMilestone] = []
+    if open_plans:
+        for index, item in enumerate(open_plans[:3], start=1):
+            title = str(item.get("title") or "科研计划")
+            milestones.append(PlanMilestone(
+                sequence=index,
+                source_plan_id=int(item["id"]) if item.get("id") is not None else None,
+                title=f"{title}：确定本阶段可验收范围",
+                objective="将当前总目标缩小为一次可完成、可复盘的研究工作时段。",
+                deliverable="一份包含本次范围、关键结论和下一步的结构化学习或研究记录。",
+                acceptance_criteria=[
+                    "明确本阶段只处理一个主题或问题",
+                    "记录至少 3 条可复核要点",
+                    "写出一个可继续验证的问题或下一步",
+                ],
+                priority=str(item.get("priority") or "medium") if str(item.get("priority") or "medium") in {"low", "medium", "high"} else "medium",
+                estimated_minutes=max(30, min(120, int(item.get("estimated_minutes") or 60))),
+                rationale="模型规划暂不可用，先将已有总计划收敛为可验收的最小阶段。",
+                evidence_refs=[f"plan:{item.get('id')}"] if item.get("id") is not None else [],
+            ))
+    else:
+        milestones.append(PlanMilestone(
+            sequence=1,
+            title="建立本周首个可验收科研计划",
+            objective="补充一个有明确范围和截止时间的最小研究目标。",
+            deliverable="一项包含交付物、验收标准和提醒时间的科研计划。",
+            acceptance_criteria=["填写具体研究主题", "设置截止时间", "写明可验收交付物"],
+            priority="medium",
+            estimated_minutes=30,
+            rationale="当前没有开放计划，无法进行进一步个性化拆解。",
+        ))
+    draft = PlanCoachDraft(
+        planning_summary="已根据现有计划生成可执行的最小阶段；本次模型结果未通过结构校验或上游服务未完成，已提供规则降级方案。",
+        capacity_assessment="当前仅能依据已记录的计划时间预算判断，尚缺少更完整的研究进度和个人背景信息。",
+        personalization_basis=["已使用当前开放计划" if open_plans else "当前缺少开放计划和个人研究背景"],
+        milestones=milestones,
+        risks=["本次未取得可通过结构校验的模型规划，当前内容为规则降级结果，需要用户复核。"],
+    )
+    return _normalize_plan_schedule(draft, plans, current_time)
+
+
+def _review_plan_draft(draft: PlanCoachDraft) -> list[str]:
+    failed: list[str] = []
+    if not draft.milestones:
+        failed.append("milestones_missing")
+    for item in draft.milestones:
+        if not item.deliverable or not item.acceptance_criteria:
+            failed.append("milestone_acceptance_missing")
+        if not item.start_at or not item.due_at or not item.reminder_at:
+            failed.append("milestone_schedule_missing")
+        if _parse_local_datetime(item.reminder_at) and _parse_local_datetime(item.start_at) and _parse_local_datetime(item.reminder_at) >= _parse_local_datetime(item.start_at):
+            failed.append("reminder_not_before_start")
+    text_blob = json.dumps(draft.model_dump(), ensure_ascii=False).lower()
+    if any(term in text_blob for term in _INTERNAL_TEXT_TERMS):
+        failed.append("internal_field_leak")
+    return list(dict.fromkeys(failed))
+
+
+def _plan_suggestions(draft: PlanCoachDraft) -> list[dict[str, Any]]:
+    return [
+        {"kind": "planning_summary", "text": draft.planning_summary},
+        {"kind": "capacity", "text": draft.capacity_assessment},
+        *[
+            {
+                "kind": "milestone",
+                "text": f"第{item.sequence}阶段：{item.title}（交付物：{item.deliverable}）",
+                "plan_id": item.source_plan_id,
+                "evidence_refs": item.evidence_refs,
+            }
+            for item in draft.milestones
+        ],
+    ]
+
+
+def _plan_drafts_from_milestones(
+    milestones: list[dict[str, Any]], plans: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    plan_by_id = {int(item["id"]): item for item in plans if item.get("id") is not None}
+    drafts: list[dict[str, Any]] = []
+    for item in milestones:
+        source = plan_by_id.get(int(item["source_plan_id"])) if item.get("source_plan_id") is not None else None
+        criteria = [str(value) for value in item.get("acceptance_criteria") or [] if str(value)]
+        drafts.append({
+            "title": str(item.get("title") or "")[:200],
+            "description": "\n".join([
+                f"目标：{str(item.get('objective') or '')}",
+                f"交付物：{str(item.get('deliverable') or '')}",
+                f"验收标准：{'；'.join(criteria)}",
+                f"规划依据：{str(item.get('rationale') or '')}",
+            ]),
+            "priority": item.get("priority") if item.get("priority") in {"low", "medium", "high"} else "medium",
+            "start_at": item.get("start_at"),
+            "due_at": item.get("due_at"),
+            "estimated_minutes": item.get("estimated_minutes"),
+            "actual_minutes": 0,
+            "reminder_at": item.get("reminder_at"),
+            "email_reminder": 1 if source and source.get("email_reminder") else 0,
+            "source_plan_id": item.get("source_plan_id"),
+            "sequence": item.get("sequence"),
+            "deliverable": item.get("deliverable"),
+            "acceptance_criteria": criteria,
+        })
+    return drafts
 
 
 def productivity_result(run_id: int, session: Session, workflow: str, skill_id: str) -> RunCreated:
@@ -267,13 +725,96 @@ def _report_title(period: str) -> str:
     }.get(period, "科研进展报告")
 
 
+def _fallback_report_draft(
+    plans: list[dict[str, Any]],
+    growth: dict[str, Any],
+    *,
+    current_time: str,
+) -> ProgressReportDraft:
+    """Produce an honest, useful report when the external model is unavailable."""
+
+    open_plans = [item for item in plans if item.get("status") in {"todo", "doing"}]
+    completed = [item for item in plans if item.get("status") == "done"]
+    work_in_progress = [
+        ReportFinding(
+            title=str(item.get("title") or "科研计划"),
+            fact=(
+                f"该计划当前状态为“{item.get('status') or 'todo'}”，预计投入 "
+                f"{item.get('estimated_minutes') or 0} 分钟，截止时间为 "
+                f"{item.get('due_at') or '尚未设置'}。目前尚未记录可核验的执行结果。"
+            ),
+            significance="计划已明确研究范围，但需要通过阶段性交付物把广泛目标转化为可检查进度。",
+            evidence_refs=[f"plan:{item.get('id')}"] if item.get("id") is not None else [],
+        )
+        for item in open_plans[:3]
+    ]
+    next_actions: list[ReportAction] = []
+    if open_plans:
+        primary = open_plans[0]
+        next_actions.append(ReportAction(
+            action=f"完成“{str(primary.get('title') or '当前科研计划')}”的首个可验收阶段",
+            rationale="当前已有开放计划但缺少执行结果记录，先完成一个小范围阶段可以建立真实进度基线。",
+            deliverable="一份聚焦单一研究主题的学习或研究笔记，包含关键概念、结论和下一步问题。",
+            acceptance_criteria=[
+                "将本次范围限定为一个明确主题或问题",
+                "记录至少三条可复核要点或结果",
+                "更新计划状态，并写明下一步工作",
+            ],
+            priority="high",
+            target_date=str(primary.get("due_at") or current_time or ""),
+            evidence_refs=[f"plan:{primary.get('id')}"] if primary.get("id") is not None else [],
+        ))
+    next_actions.append(ReportAction(
+        action="补充本周期的执行记录",
+        rationale="目前没有足够的活动、讨论或产出记录支持对研究结果作出判断。",
+        deliverable="一条包含任务、投入、结果和证据位置的科研记录。",
+        acceptance_criteria=[
+            "说明完成或未完成的具体工作",
+            "记录可复核的结果、笔记或资料位置",
+            "区分事实、待验证判断和下一步计划",
+        ],
+        priority="high",
+        target_date=current_time or None,
+    ))
+    return ProgressReportDraft(
+        executive_summary=(
+            f"本周期已记录 {len(open_plans)} 项开放计划和 {len(completed)} 项完成计划；"
+            "当前尚缺少可核验的活动、讨论或产出记录，因此不能将计划本身视为已经完成的科研成果。"
+            "下一步应先完成一个范围明确的阶段任务，并把结果写回平台。"
+        ),
+        progress_assessment=(
+            "现有信息说明研究工作已进入计划阶段，但执行证据不足，暂时只能判断目标与时间安排，"
+            "不能判断研究结论、实验效果或文献阅读是否真正完成。"
+        ),
+        completed_work=[],
+        work_in_progress=work_in_progress,
+        blockers=[ReportBlocker(
+            issue="缺少可核验的本周期执行记录",
+            impact="无法区分计划、实际投入和研究结果，组会汇报也无法据此确认实际进度。",
+            proposed_resolution="围绕当前最高优先级计划完成一个最小阶段，并记录交付物、验收标准和结果。",
+        )],
+        discussion_insights=[],
+        next_actions=next_actions,
+        risks=[
+            "若长期只保留宽泛计划而不记录阶段性交付物，进度会难以评估。",
+            "计划时间预算与目标范围不匹配时，应优先缩小范围或重新安排截止时间。",
+        ],
+        missing_information=[
+            "本周期实际执行的研究活动与投入时间",
+            "可复核的学习笔记、实验结果或论文阅读结论",
+            "计划完成状态变化及其原因",
+        ],
+    )
+
+
 def _report_snapshot(
     events: list[dict[str, Any]],
     plans: list[dict[str, Any]],
     chats: list[dict[str, Any]],
     growth: dict[str, Any],
+    profile: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
-    """Build a compact source packet instead of sending raw workflow dumps."""
+    """Build a compact, user-facing source packet instead of raw DB fields."""
 
     refs: list[str] = []
     event_rows: list[dict[str, Any]] = []
@@ -288,13 +829,12 @@ def _report_snapshot(
         refs.append(source_ref)
         event_rows.append(
             {
-                "source_ref": source_ref,
-                "created_at": item.get("created_at"),
-                "verb": item.get("verb"),
-                "object_type": object_type,
-                "object_id": object_id,
-                "result": _compact_value(item.get("result") or {}),
-                "evidence_refs": list(item.get("evidence_refs") or [])[:6],
+                "记录编号": source_ref,
+                "时间": item.get("created_at"),
+                "动作": item.get("verb"),
+                "对象": object_type,
+                "结果": _compact_value(item.get("result") or {}),
+                "证据": list(item.get("evidence_refs") or [])[:6],
             }
         )
 
@@ -304,15 +844,17 @@ def _report_snapshot(
         refs.append(source_ref)
         plan_rows.append(
             {
-                "source_ref": source_ref,
-                "title": str(item.get("title") or "")[:240],
-                "description": str(item.get("description") or "")[:500],
-                "status": item.get("status"),
-                "priority": item.get("priority"),
-                "due_at": item.get("due_at"),
-                "estimated_minutes": item.get("estimated_minutes"),
-                "actual_minutes": item.get("actual_minutes"),
-                "completed_at": item.get("completed_at"),
+                "记录编号": source_ref,
+                "计划名称": str(item.get("title") or "")[:240],
+                "计划说明": str(item.get("description") or "")[:500],
+                "状态": item.get("status"),
+                "优先级": item.get("priority"),
+                "开始时间": item.get("start_at"),
+                "截止时间": item.get("due_at"),
+                "预计分钟": item.get("estimated_minutes"),
+                "实际分钟": item.get("actual_minutes"),
+                "完成反馈": str(item.get("execution_notes") or "")[:800],
+                "完成时间": item.get("completed_at"),
             }
         )
 
@@ -325,27 +867,35 @@ def _report_snapshot(
         refs.append(source_ref)
         chat_rows.append(
             {
-                "source_ref": source_ref,
-                "role": item.get("role"),
-                "created_at": item.get("created_at"),
-                "content": content[:700],
+                "记录编号": source_ref,
+                "参与者": item.get("role"),
+                "时间": item.get("created_at"),
+                "内容": content[:700],
             }
         )
 
-    growth_rows = {
-        "directions": _compact_value(growth.get("directions") or []),
-        "matched_mentors": _compact_value(growth.get("matched_mentors") or []),
-        "read_papers": _compact_value(growth.get("read_papers") or []),
-        "research_tasks": _compact_value(growth.get("research_tasks") or []),
-        "verified_experiences": _compact_value(
+    background_rows = {
+        "研究方向": _compact_value(growth.get("directions") or []),
+        "导师匹配": _compact_value(growth.get("matched_mentors") or []),
+        "论文阅读": _compact_value(growth.get("read_papers") or []),
+        "研究任务": _compact_value(growth.get("research_tasks") or []),
+        "已核验经历": _compact_value(
             growth.get("verified_experiences") or []
         ),
     }
+    user_profile = {
+        "研究阶段": profile.get("grade") or "",
+        "专业": profile.get("major") or "",
+        "研究兴趣": _compact_value(profile.get("interests") or []),
+        "已有技能": _compact_value(profile.get("skills") or []),
+        "补充说明": str(profile.get("bio") or "")[:500],
+    }
     return {
-        "activity_records": event_rows,
-        "plan_records": plan_rows,
-        "dialogue_records": chat_rows,
-        "growth_state": growth_rows,
+        "本周期科研活动": event_rows,
+        "本周期计划与状态": plan_rows,
+        "近期讨论": chat_rows,
+        "研究背景": background_rows,
+        "用户学习背景": user_profile,
     }, list(dict.fromkeys(refs))
 
 
@@ -356,15 +906,23 @@ def _generate_report_draft(
     metrics: dict[str, int],
     snapshot: dict[str, Any],
     allowed_evidence_refs: list[str],
+    period_start: str,
+    period_end: str,
+    current_time: str,
+    timezone: str,
 ) -> tuple[ProgressReportDraft, dict[str, Any]]:
     settings = get_settings()
     provider = chat_provider_from_settings(settings).model_copy(deep=True)
     provider.settings = {
         **provider.settings,
-        "max_tokens": min(settings.chat_max_tokens, 2200),
-        "timeout": min(float(provider.settings.get("timeout") or 60), 60),
+        "max_tokens": min(settings.chat_max_tokens, settings.report_chat_max_tokens),
+        "timeout": float(settings.report_chat_timeout_seconds),
         "max_retries": 0,
         "response_format": {"type": "json_object"},
+        "extra_body": {
+            **(provider.settings.get("extra_body") or {}),
+            "thinking": {"type": "disabled"},
+        },
     }
     period_name = {"daily": "本日", "weekly": "本周", "monthly": "本月"}.get(
         period, "本周期"
@@ -373,21 +931,24 @@ def _generate_report_draft(
 你是科研进展报告 Agent。请按照正式组会汇报的严谨度分析{period_name}记录，而不是复述数据库日志。
 
 硬约束：
-1. 只能使用 input_snapshot 中的记录；未记录的事实必须写入 missing_information，禁止补写。
+1. 只能使用“本周期资料”中的记录；未记录的事实必须写入 missing_information，禁止补写。
 2. WORKFLOW、Agent、检索开始/完成等运行日志不是科研成果。只有计划完成、已审核产物、论文阅读、研究结论或用户明确陈述才能进入 completed_work。
 3. 每个事实、阻塞和建议尽量引用 allowed_evidence_refs；不得创造列表外的引用。
 4. 区分“做了什么”“得到什么结果”“科研意义是什么”。没有结果时明确写“尚无可核验结论”。
-5. 下一步必须具体到交付物和验收标准，避免“继续努力、加强学习”等空话。
-6. 输出中文；语气适合实验室组会，简洁但有分析，不输出思维链。
-7. 只返回符合 required_json_schema 的 JSON 对象，不要 Markdown 代码围栏。
+5. 下一步必须具体到交付物和验收标准，避免“继续努力、加强学习”等空话；优先围绕已有开放计划安排，不得无依据推荐导师匹配或论文阅读。
+6. 报告中严禁出现 input_snapshot、activity_records、plan_records、dialogue_records、growth_state 等内部字段名，也不要出现数据库、JSON、AgentRun、文件路径、接口名或配置名等技术实现词；把技术故障概括为用户可理解的“本地资源不可用”或“检索资源待修复”。
+7. 所有下一步日期必须不早于“当前时间”，并优先遵守已有计划的截止时间；日期格式使用 YYYY-MM-DD 或 YYYY-MM-DDTHH:MM。
+8. 输出中文；语气适合实验室组会，简洁但有分析，不输出思维链。
+9. 只返回一个 JSON 对象，必须且只能包含 executive_summary、progress_assessment、completed_work、work_in_progress、blockers、discussion_insights、next_actions、risks、missing_information；不要返回 report_title、period_type、metrics、输出结构或本提示中的其他契约字段。
+10. completed_work、work_in_progress、discussion_insights 使用对象数组；blockers 和 next_actions 使用对应对象数组；没有内容就返回空数组，但 next_actions 至少一项。
+11. 严格遵守“输出 JSON 结构”：所有 *work 和 *insights 项必须含 title、fact、significance、evidence_refs；next_actions.acceptance_criteria 必须是字符串数组。不要把统计、资料或结构字段原样输出。
 """.strip()
     payload = {
-        "report_title": title,
-        "period_type": period,
-        "metrics": metrics,
-        "allowed_evidence_refs": allowed_evidence_refs,
-        "input_snapshot": snapshot,
-        "required_json_schema": ProgressReportDraft.model_json_schema(),
+        "时间范围": {"开始": period_start, "结束": period_end, "当前时间": current_time, "时区": timezone},
+        "统计": metrics,
+        "可用证据编号": allowed_evidence_refs,
+        "输出 JSON 结构": _REPORT_OUTPUT_CONTRACT,
+        "本周期资料": snapshot,
     }
     raw = OpenAICompatibleChatModelAdapter().generate_text(
         provider,
@@ -395,11 +956,14 @@ def _generate_report_draft(
             {"role": "system", "content": system},
             {
                 "role": "user",
-                "content": "请生成结构化科研进展报告。\n" + json.dumps(payload, ensure_ascii=False),
+                "content": "请基于以下资料生成报告。只返回目标字段 JSON，不要复述资料对象或字段名契约。\n" + json.dumps(payload, ensure_ascii=False),
             },
         ],
     )
-    draft = _parse_json_model(raw, ProgressReportDraft)
+    try:
+        draft = _parse_json_model(raw, ProgressReportDraft)
+    except ValueError:
+        draft = _repair_report_draft(provider, raw, snapshot, metrics, period_start, period_end, current_time, timezone)
     generation = {
         "agent": "progress_report_agent",
         "status": "completed",
@@ -411,6 +975,46 @@ def _generate_report_draft(
     return draft, generation
 
 
+def _repair_report_draft(
+    provider: Any,
+    raw: str,
+    snapshot: dict[str, Any],
+    metrics: dict[str, int],
+    period_start: str,
+    period_end: str,
+    current_time: str,
+    timezone: str,
+) -> ProgressReportDraft:
+    """Repair malformed report JSON without inventing facts outside the source packet."""
+
+    repair_provider = provider.model_copy(deep=True)
+    repair_provider.settings = {
+        **repair_provider.settings,
+        "max_tokens": min(int(repair_provider.settings.get("max_tokens") or 900), 1400),
+        "extra_body": {"thinking": {"type": "disabled"}},
+    }
+    repair_payload = {
+        "时间范围": {"开始": period_start, "结束": period_end, "当前时间": current_time, "时区": timezone},
+        "统计": metrics,
+        "输出 JSON 结构": _REPORT_OUTPUT_CONTRACT,
+        "本周期资料": snapshot,
+        "待修复输出": raw[:9000],
+    }
+    repaired = OpenAICompatibleChatModelAdapter().generate_text(
+        repair_provider,
+        [
+            {"role": "system", "content": (
+                "你是科研报告 JSON 修复器。只依据本周期资料修复待修复输出，"
+                "只返回一个合法 JSON 对象，字段必须且只能符合输出 JSON 结构。"
+                "completed_work、work_in_progress、discussion_insights 必须是包含 title、fact、significance、evidence_refs 的对象数组；"
+                "next_actions 的 acceptance_criteria 必须是字符串数组。不要解释，不要添加未记录事实。"
+            )},
+            {"role": "user", "content": json.dumps(repair_payload, ensure_ascii=False)},
+        ],
+    )
+    return _parse_json_model(repaired, ProgressReportDraft)
+
+
 def _parse_json_model(raw: str, schema: type[BaseModel]) -> Any:
     cleaned = raw.strip()
     if cleaned.startswith("```"):
@@ -420,9 +1024,182 @@ def _parse_json_model(raw: str, schema: type[BaseModel]) -> Any:
     if start >= 0 and end > start:
         cleaned = cleaned[start : end + 1]
     try:
-        return schema.model_validate_json(cleaned)
+        payload = json.loads(cleaned)
+        if schema is ProgressReportDraft and isinstance(payload, dict):
+            _normalize_report_model_payload(payload)
+        if schema is PlanCoachDraft and isinstance(payload, dict):
+            _normalize_plan_model_payload(payload)
+        return schema.model_validate(payload)
     except (ValidationError, ValueError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Progress report model output failed validation: {exc}") from exc
+        raise ValueError(f"Model output failed validation: {exc}") from exc
+
+
+def _normalize_report_model_payload(payload: dict[str, Any]) -> None:
+    """Accept harmless DeepSeek naming variants without inventing research facts."""
+    actions = payload.get("next_actions")
+    if not isinstance(actions, list):
+        return
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if not action.get("target_date") and action.get("due_date"):
+            action["target_date"] = action["due_date"]
+        action.setdefault(
+            "rationale",
+            "依据当前已记录资料，将下一步收敛为可核验的行动。",
+        )
+        action.setdefault(
+            "deliverable",
+            "一份记录工作范围、结果与下一步的问题说明。",
+        )
+        if not isinstance(action.get("acceptance_criteria"), list) or not action["acceptance_criteria"]:
+            action["acceptance_criteria"] = ["明确本次工作范围", "记录至少一条可复核结果"]
+    for key in ("risks", "missing_information"):
+        values = payload.get(key)
+        if not isinstance(values, list):
+            continue
+        normalized: list[str] = []
+        for value in values:
+            if isinstance(value, str):
+                normalized.append(value)
+            elif isinstance(value, dict):
+                text = next(
+                    (str(item).strip() for item in value.values() if isinstance(item, str) and item.strip()),
+                    "",
+                )
+                if text:
+                    normalized.append(text)
+        payload[key] = normalized
+
+
+def _normalize_plan_model_payload(payload: dict[str, Any]) -> None:
+    def string_list(value: Any) -> list[str]:
+        if isinstance(value, str):
+            return [value.strip()] if value.strip() else []
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if isinstance(item, (str, int, float)) and str(item).strip()]
+
+    basis = payload.get("personalization_basis")
+    if isinstance(basis, (str, list)):
+        payload["personalization_basis"] = string_list(basis)
+    milestones = payload.get("milestones")
+    if isinstance(milestones, dict):
+        milestones = [milestones]
+        payload["milestones"] = milestones
+    if isinstance(milestones, list):
+        for milestone in milestones:
+            if not isinstance(milestone, dict):
+                continue
+            source_plan_id = milestone.get("source_plan_id")
+            if isinstance(source_plan_id, str):
+                matched = re.fullmatch(r"(?:plan:)?(\d+)", source_plan_id.strip())
+                if matched:
+                    milestone["source_plan_id"] = int(matched.group(1))
+                else:
+                    milestone["source_plan_id"] = None
+            elif isinstance(source_plan_id, float):
+                milestone["source_plan_id"] = int(source_plan_id) if source_plan_id.is_integer() else None
+            elif source_plan_id is not None and not isinstance(source_plan_id, int):
+                milestone["source_plan_id"] = None
+            criteria = milestone.get("acceptance_criteria")
+            if isinstance(criteria, (str, list)):
+                milestone["acceptance_criteria"] = string_list(criteria)[:4]
+            evidence_refs = milestone.get("evidence_refs")
+            if isinstance(evidence_refs, (str, list)):
+                milestone["evidence_refs"] = string_list(evidence_refs)
+    risks = payload.get("risks")
+    if isinstance(risks, (str, list)):
+        payload["risks"] = string_list(risks)
+
+
+def _humanize_text(value: str) -> str:
+    replacements = {
+        "input_snapshot": "本周期资料",
+        "activity_records": "科研活动记录",
+        "plan_records": "计划记录",
+        "dialogue_records": "讨论记录",
+        "growth_state": "科研档案",
+        "matched_mentors": "导师匹配记录",
+        "read_papers": "论文阅读记录",
+        "research_tasks": "研究任务记录",
+        "verified_experiences": "已核验经历",
+    }
+    result = value
+    for source, target in replacements.items():
+        result = result.replace(source, target)
+    result = re.sub(r"\bplan:\d+\b", "当前计划", result)
+    result = re.sub(r"\bactivity:[\w:-]+\b", "科研活动记录", result)
+    result = re.sub(r"\bchat:[\w:-]+\b", "讨论记录", result)
+    return result
+
+
+def _humanize_report_draft(draft: ProgressReportDraft) -> ProgressReportDraft:
+    """Never allow transport/database vocabulary into a user-facing report."""
+
+    payload = draft.model_dump()
+
+    def visit(value: Any) -> Any:
+        if isinstance(value, str):
+            return _humanize_text(value)
+        if isinstance(value, list):
+            return [visit(item) for item in value]
+        if isinstance(value, dict):
+            return {key: visit(item) for key, item in value.items()}
+        return value
+
+    return ProgressReportDraft.model_validate(visit(payload))
+
+
+def _humanize_plan_draft(draft: PlanCoachDraft) -> PlanCoachDraft:
+    payload = draft.model_dump()
+
+    def visit(value: Any) -> Any:
+        if isinstance(value, str):
+            return _humanize_text(value)
+        if isinstance(value, list):
+            return [visit(item) for item in value]
+        if isinstance(value, dict):
+            return {key: visit(item) for key, item in value.items()}
+        return value
+
+    return PlanCoachDraft.model_validate(visit(payload))
+
+
+def _parse_local_datetime(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
+
+
+def _format_local_datetime(value: datetime) -> str:
+    return value.strftime("%Y-%m-%dT%H:%M")
+
+
+def _normalize_report_action_dates(
+    draft: ProgressReportDraft,
+    *,
+    period_end: str,
+    current_time: str,
+) -> ProgressReportDraft:
+    """Prevent a model from proposing already-expired dates in next actions."""
+
+    normalized = draft.model_copy(deep=True)
+    floor = _parse_local_datetime(current_time) or _parse_local_datetime(period_end)
+    if floor is None:
+        return normalized
+    for item in normalized.next_actions:
+        proposed = _parse_local_datetime(item.target_date)
+        if proposed is None or proposed.date() < floor.date():
+            item.target_date = floor.strftime("%Y-%m-%d")
+    return normalized
 
 
 def _restrict_evidence_refs(
@@ -448,6 +1225,7 @@ def _render_progress_markdown(
     metrics: dict[str, int],
     draft: ProgressReportDraft,
 ) -> str:
+    completion_feedbacks = int(metrics.get("completion_feedbacks") or 0)
     cycle = {"daily": "本日", "weekly": "本周", "monthly": "本月"}.get(
         period, "本周期"
     )
@@ -473,16 +1251,24 @@ def _render_progress_markdown(
                 ]
             )
     else:
-        lines.append("- 无可核验完成项；系统运行记录未被当作科研产出。")
+        lines.append("- 本周期暂无可核验的完成项。")
 
     lines.extend(["", "## 四、进行中工作"])
-    if draft.work_in_progress:
-        for item in draft.work_in_progress:
+    no_verified_execution = draft.work_in_progress and all(
+        "尚未记录可核验" in item.fact for item in draft.work_in_progress
+    )
+    if no_verified_execution:
+        lines.append(
+            f"- 当前有 {metrics['pending_plans']} 项开放计划，但本周期尚无可核验的执行结果；"
+            "计划状态和时间预算请结合下方量化记录与计划页查看。"
+        )
+    elif draft.work_in_progress:
+        for item in draft.work_in_progress[:2]:
             lines.extend(
                 [
                     f"### {item.title}",
-                    f"- 当前状态：{item.fact}",
-                    f"- 预期意义：{item.significance}",
+                    f"- {item.fact}",
+                    f"- 研究含义：{item.significance}",
                     f"- 依据：{_refs(item.evidence_refs)}",
                 ]
             )
@@ -537,7 +1323,7 @@ def _render_progress_markdown(
             "",
             "## 八、量化记录",
             f"- 科研活动记录：{metrics['activity_events']} 条",
-            f"- 有效对话：{metrics['dialogue_turns']} 条",
+            f"- 完成反馈：{completion_feedbacks} 条",
             f"- 完成计划：{metrics['completed_plans']} 项",
             f"- 开放计划：{metrics['pending_plans']} 项",
             f"- 已审核匹配导师：{metrics['matched_mentors']} 位",
@@ -552,7 +1338,16 @@ def _render_progress_markdown(
     if not draft.missing_information:
         lines.append("- 未发现模型需要额外声明的信息缺口。")
     lines.append("- 报告只使用平台内已记录事实；未记录的线下进展不作推断。")
-    return "\n".join(lines)
+    return _sanitize_report_markdown("\n".join(lines))
+
+
+def _sanitize_report_markdown(markdown: str) -> str:
+    """Keep implementation paths and field labels out of researcher-facing reports."""
+
+    cleaned = _LOCAL_PATH.sub("本地资源", markdown)
+    for term in _INTERNAL_TEXT_TERMS:
+        cleaned = re.sub(re.escape(term), "平台记录", cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 def _review_report(markdown: str, draft: ProgressReportDraft) -> list[str]:
@@ -568,6 +1363,15 @@ def _review_report(markdown: str, draft: ProgressReportDraft) -> list[str]:
     )
     if runtime_hits >= 2:
         failed.append("runtime_log_leak")
+    lowered = markdown.lower()
+    if any(term in lowered for term in _INTERNAL_TEXT_TERMS):
+        failed.append("internal_field_leak")
+    if any(
+        _parse_local_datetime(item.target_date)
+        and _parse_local_datetime(item.target_date).date() < datetime.now().date()
+        for item in draft.next_actions
+    ):
+        failed.append("past_target_date")
     return failed
 
 
@@ -612,7 +1416,21 @@ def _collect_evidence_refs(value: Any) -> list[str]:
 
 
 def _refs(values: list[str]) -> str:
-    return "、".join(values) if values else "平台记录（无外部证据编号）"
+    if not values:
+        return "平台记录（无外部证据编号）"
+    readable: list[str] = []
+    for value in values:
+        if value.startswith("plan:"):
+            readable.append("计划记录")
+        elif value.startswith("activity:"):
+            readable.append("科研活动记录")
+        elif value.startswith("chat:"):
+            readable.append("讨论记录")
+        elif value.startswith("paper_chunk:"):
+            readable.append("论文证据")
+        else:
+            readable.append(value)
+    return "、".join(dict.fromkeys(readable))
 
 
 def _persist_progress(
@@ -654,6 +1472,7 @@ def _persist_progress(
             error_message=error_message,
         )
     session.commit()
+    _record_stage(session, run.id, "completed", 100, "报告已生成，可查看并复核")
     return RunCreated(
         run_id=str(run.id),
         skill_id="progress_report",
@@ -671,14 +1490,22 @@ def _persist(
     skill_id: str,
     artifact: dict[str, Any],
     evidence_refs: list[str],
+    *,
+    run_id: int | None = None,
 ) -> RunCreated:
-    run = AgentRunRepository(session).create(
-        workflow,
-        status=RunStatus.succeeded.value,
-        input_json={"message": request.message, "metadata": {"harness_skill_id": skill_id}},
-        output_json={"review_status": "PASS", "evidence_refs": evidence_refs, "artifact": artifact},
-    )
+    repository = AgentRunRepository(session)
+    output_json = {"review_status": "PASS", "evidence_refs": evidence_refs, "artifact": artifact}
+    if run_id is None:
+        run = repository.create(
+            workflow,
+            status=RunStatus.succeeded.value,
+            input_json={"message": request.message, "metadata": {"harness_skill_id": skill_id, **_audit_context(request)}},
+            output_json=output_json,
+        )
+    else:
+        run = repository.update_status(run_id, RunStatus.succeeded.value, output_json=output_json)
     session.commit()
+    _record_stage(session, run.id, "completed", 100, "计划已生成，可查看阶段拆解与提醒")
     return RunCreated(
         run_id=str(run.id), skill_id=skill_id, status=run.status,
         review_status="PASS", evidence_refs=evidence_refs, artifact=artifact,

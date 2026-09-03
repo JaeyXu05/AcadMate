@@ -15,6 +15,22 @@
 .reportHeader h3, .planHeader h3 { color: #1c1917; margin: 0 0 5px; font-weight: 500; }
 .reportHeader span, .planMeta, .evidenceLine { color: #a8a29e; font-size: 12px; }
 .passTag { color: #1c1917 !important; }
+.reportVisuals { margin: 18px 0 20px; padding: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; }
+.metricGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.metricCard { min-height: 82px; padding: 13px; border-radius: 8px; background: #fff; border: 1px solid #e2e8f0; display: flex; flex-direction: column; justify-content: space-between; }
+.metricCard span { color: #64748b; font-size: 12px; }
+.metricCard strong { color: #0f172a; font-size: 27px; line-height: 1; font-weight: 650; }
+.metricIndigo { border-top: 3px solid #4f46e5; }.metricTeal { border-top: 3px solid #0d9488; }.metricAmber { border-top: 3px solid #f59e0b; }.metricSky { border-top: 3px solid #0ea5e9; }
+.reportDataGrid { display: grid; grid-template-columns: minmax(280px, .92fr) minmax(340px, 1.35fr); gap: 14px; margin-top: 14px; }
+.reportTableWrap, .trendPanel { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 13px; }
+.reportTableWrap h4, .trendTitle h4 { color: #334155; margin: 0 0 10px; font-size: 13px; font-weight: 600; }
+.reportTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.reportTable th, .reportTable td { padding: 8px 5px; border-top: 1px solid #eef2f7; text-align: left; }
+.reportTable th { color: #64748b; font-weight: 500; }.reportTable td { color: #0f172a; font-weight: 600; }
+.trendTitle { display: flex; justify-content: space-between; gap: 12px; align-items: center; }.trendTitle span { color: #94a3b8; font-size: 11px; }
+.trendBars { height: 102px; display: flex; align-items: flex-end; gap: 8px; border-bottom: 1px solid #cbd5e1; padding: 5px 4px 0; }
+.trendGroup { flex: 1; min-width: 28px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+.barPair { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 3px; }.barPair i { display: block; width: min(11px, 35%); border-radius: 3px 3px 0 0; transition: height .35s ease; }.activityBar { background: #6366f1; }.completedBar { background: #14b8a6; }.trendGroup small { color: #94a3b8; font-size: 10px; white-space: nowrap; }.trendEmpty { margin: 22px 0; color: #94a3b8; font-size: 12px; }
 .markdown { word-break: break-word; color: #44403c; line-height: 1.75; margin: 18px 0; }
 .markdown h2 { margin: 22px 0 12px; color: #1c1917; font-size: 20px; font-weight: 600; }
 .markdown h3 { margin: 22px 0 10px; padding-bottom: 6px; border-bottom: 1px solid rgba(28,25,23,.08); color: #292524; font-size: 16px; font-weight: 600; }
@@ -26,13 +42,26 @@
 .bulletLine::before { position: absolute; left: 3px; content: '•'; color: #78716c; }
 .numberedLine { margin: 14px 0 5px; color: #292524; }
 .evidenceLine { border-top: 1px solid rgba(28, 25, 23, 0.06); padding-top: 12px; }
+.staleNotice { margin: 12px 0; padding: 9px 11px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 6px; font-size: 13px; }
 .reportActions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 .reportActions a { color: #4f46e5; font-size: 13px; }
 .loading { min-height: 240px; display: grid; place-items: center; }
 .suggestionCard { margin-bottom: 18px; }
 .suggestionCard p { color: #57534e; margin: 9px 0; }
+.reminderAlert { margin: 0 0 18px; }
+.coachHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; }
+.coachHeader p { margin: 0; }
+.coachAssessment, .coachBasis, .planDetail { color: #57534e; font-size: 13px; line-height: 1.6; margin: 10px 0; }
+.coachRisk { margin: 14px 0; }
+.milestoneList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.milestoneCard { padding: 14px; border: 1px solid rgba(28, 25, 23, 0.1); background: #fafaf9; }
+.milestoneCard h4 { color: #1c1917; margin: 0; font-size: 14px; font-weight: 500; }
+.milestoneCard p { font-size: 13px; line-height: 1.55; }
 .planGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .planCard p { color: #78716c; line-height: 1.55; min-height: 42px; }
+.completionFeedback { margin-top: 12px; padding: 10px 11px; color: #334155; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 6px; font-size: 13px; line-height: 1.55; }
+.completionFeedback b { color: #0f766e; }.completionFeedback span { display: block; margin-top: 4px; color: #64748b; font-size: 12px; }
+.completionHint { margin: 0; color: #64748b; line-height: 1.65; font-size: 13px; }
 .priority { font-size: 11px; letter-spacing: 0.08em; }
 .high { color: #334155; }
 .medium { color: #64748b; }
@@ -41,4 +70,4 @@
 .formGrid { display: flex; flex-direction: column; gap: 14px; }
 .formGrid label { display: flex; flex-direction: column; gap: 6px; color: #57534e; }
 .switchLine { flex-direction: row !important; justify-content: space-between; align-items: center; }
-@media (max-width: 760px) { .settingsGrid, .planGrid { grid-template-columns: 1fr; } .toolbar { flex-direction: column; align-items: flex-start; } }
+@media (max-width: 760px) { .settingsGrid, .planGrid, .milestoneList, .metricGrid, .reportDataGrid { grid-template-columns: 1fr; } .toolbar { flex-direction: column; align-items: flex-start; } .coachHeader { flex-direction: column; } }

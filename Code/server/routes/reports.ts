@@ -6,6 +6,7 @@ import { ensureProductivitySchema, getDb } from '../db';
 import { drainEmailOutbox, queueEmail, smtpConfigured } from '../services/mailer';
 import { buildPresentation } from '../services/ppt';
 import { runHarnessSkill } from '../harnessClient';
+import { buildPersonalHarnessContext } from '../data/personalHarnessContext';
 
 export const reportsRouter = Router();
 reportsRouter.use(authMiddleware);
@@ -53,7 +54,8 @@ function activityContext(userId: number, start: Date, end: Date) {
       ORDER BY created_at DESC LIMIT 60`,
   ).all(userId, startSql, endSql) as any[];
   const plans = db.prepare(
-    `SELECT id, title, description, status, priority, due_at, estimated_minutes, actual_minutes, completed_at
+    `SELECT id, title, description, deliverable, acceptance_criteria, status, priority, start_at, due_at,
+            estimated_minutes, actual_minutes, execution_notes, reminder_at, email_reminder, completed_at, created_at, updated_at
        FROM plans WHERE user_id=? AND datetime(created_at) <= datetime(?)
          AND (status IN ('todo','doing') OR datetime(completed_at) BETWEEN datetime(?) AND datetime(?))
        ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END, due_at`,
@@ -87,10 +89,11 @@ function reportBaseline(period: PeriodType, context: ReturnType<typeof activityC
   const titles = { daily: '科研日报', weekly: '科研周报', monthly: '科研月报' };
   const completed = context.plans.filter((item) => item.status === 'done');
   const pending = context.plans.filter((item) => item.status === 'todo' || item.status === 'doing');
+  const completionFeedbacks = completed.filter((item) => String(item.execution_notes || '').trim());
   const evidenceRefs = [...new Set(context.events.flatMap((item) => item.evidence_refs ?? []))] as string[];
   const metrics = {
     activity_events: context.events.length,
-    dialogue_turns: context.chats.length,
+    completion_feedbacks: completionFeedbacks.length,
     completed_plans: completed.length,
     pending_plans: pending.length,
     matched_mentors: Array.isArray((context.growth as any).matched_mentors) ? (context.growth as any).matched_mentors.length : 0,
@@ -176,11 +179,12 @@ async function generateReport(userId: number, period: PeriodType, reference = ne
   ensureProductivitySchema(getDb());
   const bounds = periodBounds(period, reference);
   const context = activityContext(userId, bounds.start, bounds.end);
+  const personal = buildPersonalHarnessContext(userId, context.plans);
   const baseline = reportBaseline(period, context);
-  const timeoutRaw = Number(process.env.REPORT_AGENT_TIMEOUT_MS || 90000);
+  const timeoutRaw = Number(process.env.REPORT_AGENT_TIMEOUT_MS || 240_000);
   const timeoutMs = Number.isFinite(timeoutRaw)
-    ? Math.max(30_000, Math.min(timeoutRaw, 180_000))
-    : 90_000;
+    ? Math.max(30_000, Math.min(timeoutRaw, 360_000))
+    : 240_000;
   const result = await runHarnessSkill({
     userId,
     skillId: 'progress_report',
@@ -189,12 +193,18 @@ async function generateReport(userId: number, period: PeriodType, reference = ne
     timeoutMs,
     context: {
       report_period: period,
-      period_start: bounds.start.toISOString(),
-      period_end: bounds.end.toISOString(),
+      period_start: sqlDate(bounds.start).replace(' ', 'T'),
+      period_end: sqlDate(bounds.end).replace(' ', 'T'),
+      current_time: sqlDate(reference).replace(' ', 'T'),
+      timezone: 'Asia/Shanghai',
       progress_events: context.events,
       chat_summary: context.chats,
       plans: context.plans,
-      growth: context.growth,
+      growth: personal.trusted.growth,
+      profile: personal.trusted.profile,
+      personal_harness_summary: personal.summary,
+      input_fingerprint: personal.fingerprint,
+      input_audit: personal.audit,
     },
   });
   const artifact = result?.artifact;
@@ -217,12 +227,82 @@ async function generateReport(userId: number, period: PeriodType, reference = ne
   return report;
 }
 
-function mapReport(row: any) {
+function reportFreshness(row: any, userId: number): { is_stale: boolean; newer_records_count: number } {
+  const db = getDb();
+  const reportTime = String(row.created_at || '');
+  if (!reportTime) return { is_stale: false, newer_records_count: 0 };
+  const candidates = [
+    db.prepare('SELECT MAX(created_at) AS value FROM plans WHERE user_id=?').get(userId) as any,
+    db.prepare('SELECT MAX(updated_at) AS value FROM plans WHERE user_id=?').get(userId) as any,
+    db.prepare('SELECT MAX(created_at) AS value FROM chat_history WHERE user_id=?').get(userId) as any,
+    db.prepare('SELECT MAX(created_at) AS value FROM growth_events WHERE user_id=?').get(userId) as any,
+    db.prepare('SELECT updated_at AS value FROM growth_state WHERE user_id=?').get(userId) as any,
+  ].map((item) => String(item?.value || '')).filter(Boolean);
+  const newer = candidates.filter((value) => value > reportTime);
+  return { is_stale: newer.length > 0, newer_records_count: newer.length };
+}
+
+function evidenceSummary(refs: unknown[]): string {
+  const values = Array.isArray(refs) ? refs.map(String) : [];
+  const plan = values.filter((item) => item.startsWith('plan:')).length;
+  const activity = values.filter((item) => item.startsWith('activity:')).length;
+  const chat = values.filter((item) => item.startsWith('chat:')).length;
+  const external = values.length - plan - activity - chat;
+  const parts = [
+    plan ? `${plan} 项计划记录` : '',
+    activity ? `${activity} 条科研活动` : '',
+    chat ? `${chat} 条讨论记录` : '',
+    external ? `${external} 条外部证据` : '',
+  ].filter(Boolean);
+  return parts.length ? `依据：${parts.join('、')}` : '依据：本周期暂无可引用记录';
+}
+
+function presentationVisualData(userId: number, report: any): Record<string, unknown> {
+  const db = getDb();
+  const evidenceRefs = safeJson(report.evidence_refs, [] as string[]).map(String);
+  const evidence = {
+    plan: evidenceRefs.filter((item) => item.startsWith('plan:')).length,
+    activity: evidenceRefs.filter((item) => item.startsWith('activity:')).length,
+    chat: evidenceRefs.filter((item) => item.startsWith('chat:')).length,
+    other: evidenceRefs.filter((item) => !/^(plan|activity|chat):/.test(item)).length,
+  };
+  const plans = db.prepare(
+    `SELECT title,status,priority,due_at,estimated_minutes,actual_minutes,completed_at
+       FROM plans WHERE user_id=? AND datetime(created_at) <= datetime(?)
+       ORDER BY CASE status WHEN 'doing' THEN 0 WHEN 'todo' THEN 1 ELSE 2 END, due_at, id DESC LIMIT 6`,
+  ).all(userId, String(report.period_end || '')) as any[];
+  const historyRows = db.prepare(
+    `SELECT period_end,metrics_json FROM progress_reports
+       WHERE user_id=? AND period_type=? AND datetime(period_end) <= datetime(?)
+       ORDER BY datetime(period_end) DESC LIMIT 7`,
+  ).all(userId, String(report.period_type || 'daily'), String(report.period_end || '')) as any[];
+  const history = historyRows.reverse().map((item) => {
+    const metrics = safeJson<Record<string, unknown>>(item.metrics_json, {});
+    return {
+      label: String(item.period_end || '').slice(5, 10) || '本期',
+      activity_events: Number(metrics.activity_events || 0),
+      completed_plans: Number(metrics.completed_plans || 0),
+      pending_plans: Number(metrics.pending_plans || 0),
+    };
+  });
+  return {
+    metrics: safeJson<Record<string, unknown>>(report.metrics_json, {}),
+    period: { start: String(report.period_start || ''), end: String(report.period_end || ''), type: String(report.period_type || '') },
+    plans,
+    history,
+    evidence,
+  };
+}
+
+function mapReport(row: any, userId?: number) {
+  const evidenceRefs = safeJson(row.evidence_refs, [] as string[]);
   return {
     ...row,
     metrics: safeJson(row.metrics_json, {}),
-    evidence_refs: safeJson(row.evidence_refs, []),
+    evidence_refs: evidenceRefs,
+    evidence_summary: evidenceSummary(evidenceRefs),
     generation: safeJson(row.generation_json, {}),
+    ...(userId ? reportFreshness(row, userId) : { is_stale: false, newer_records_count: 0 }),
   };
 }
 
@@ -274,7 +354,7 @@ reportsRouter.get('/', (req: AuthRequest, res: Response) => {
   try {
     ensureProductivitySchema(getDb());
     const rows = getDb().prepare("SELECT * FROM progress_reports WHERE user_id=? AND review_status='PASS' ORDER BY period_end DESC, id DESC").all(req.userId!);
-    res.json((rows as any[]).map(mapReport));
+    res.json((rows as any[]).map((row) => mapReport(row, req.userId!)));
   } catch (err) {
     fail(res, err, '报告列表加载失败');
   }
@@ -293,7 +373,7 @@ reportsRouter.post('/generate', async (req: AuthRequest, res: Response) => {
       queueEmail({ userId: req.userId!, recipient: user.email, subject: report.title, body: report.content_markdown, kind: `report:${period}` });
       void drainEmailOutbox();
     }
-    res.json(mapReport(report));
+    res.json(mapReport(report, req.userId!));
   } catch (err) {
     fail(res, err, '报告智能体生成失败');
   }
@@ -325,6 +405,7 @@ reportsRouter.post('/:reportId/presentation', async (req: AuthRequest, res: Resp
     slideCount,
     markdown: String(report.content_markdown || ''),
     evidenceRefs: safeJson(report.evidence_refs, []),
+    visualData: presentationVisualData(req.userId!, report),
   }, outputPath).then(() => {
     db.prepare("UPDATE presentation_jobs SET status='succeeded', completed_at=datetime('now','localtime') WHERE id=? AND user_id=?").run(jobId, req.userId!);
   }).catch((error: unknown) => {

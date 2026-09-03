@@ -22,24 +22,21 @@ const periodLabels: Record<ReportPeriod, string> = { daily: '日报', weekly: '�
 
 function reviewStatusLabel(status: string): string {
   if (status === 'LOCAL' || status === 'DEGRADED') return '本地摘要';
-  return status;
+  if (status === 'PASS') return '已通过内容校验';
+  if (status === 'REVISE') return '需重新生成';
+  return '已生成';
 }
 
 function generationLabel(report: ProgressReport): string {
   const status = report.generation?.status;
   if (status === 'local' || report.review_status === 'LOCAL') return '本地记录摘要';
   if (status === 'fallback' || report.review_status === 'DEGRADED') {
-    return report.generation?.reason
-      ? `本地记录摘要（${report.generation.reason}）`
-      : '本地记录摘要（智能体未完成）';
+    return 'AI 暂时不可用，已依据平台记录生成结构化摘要';
   }
   if (report.generation?.agent === 'progress_report_agent') {
-    const bits = ['科研进展报告 Agent'];
-    if (report.generation.model) bits.push(report.generation.model);
-    if (status) bits.push(status);
-    return bits.join(' · ');
+    return 'AI 基于平台记录生成';
   }
-  return report.generation?.agent || '未知';
+  return '基于平台记录生成';
 }
 
 function inlineMarkdown(text: string): ReactNode[] {
@@ -64,6 +61,61 @@ function ReportMarkdown({ content }: { content: string }) {
         return <p key={index}>{inlineMarkdown(text)}</p>;
       })}
     </div>
+  );
+}
+
+const reportMetricLabels: Array<{ key: string; label: string; tone: string }> = [
+  { key: 'activity_events', label: '科研活动', tone: 'indigo' },
+  { key: 'completed_plans', label: '完成计划', tone: 'teal' },
+  { key: 'pending_plans', label: '开放计划', tone: 'amber' },
+  { key: 'read_papers', label: '论文阅读', tone: 'sky' },
+];
+
+function ReportVisuals({ report, history }: { report: ProgressReport; history: ProgressReport[] }) {
+  const metric = (item: ProgressReport, key: string) => Number(item.metrics?.[key] || 0);
+  const points = history
+    .filter((item) => item.period_type === report.period_type)
+    .sort((left, right) => left.period_end.localeCompare(right.period_end))
+    .slice(-7);
+  const maxValue = Math.max(1, ...points.flatMap((item) => [metric(item, 'activity_events'), metric(item, 'completed_plans')]));
+
+  return (
+    <section className={styles.reportVisuals} aria-label="本期科研数据概览">
+      <div className={styles.metricGrid}>
+        {reportMetricLabels.map(({ key, label, tone }) => (
+          <div className={`${styles.metricCard} ${styles[`metric${tone[0].toUpperCase()}${tone.slice(1)}`]}`} key={key}>
+            <span>{label}</span><strong>{metric(report, key)}</strong>
+          </div>
+        ))}
+      </div>
+      <div className={styles.reportDataGrid}>
+        <div className={styles.reportTableWrap}>
+          <h4>量化记录</h4>
+          <table className={styles.reportTable}>
+            <tbody>
+              <tr><th>完成反馈</th><td>{metric(report, 'completion_feedbacks')}</td><th>导师匹配</th><td>{metric(report, 'matched_mentors')}</td></tr>
+              <tr><th>计划完成率</th><td>{Math.round(metric(report, 'completed_plans') / Math.max(1, metric(report, 'completed_plans') + metric(report, 'pending_plans')) * 100)}%</td><th>证据条目</th><td>{report.evidence_refs?.length || 0}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div className={styles.trendPanel}>
+          <div className={styles.trendTitle}><h4>活动趋势</h4><span>活动 / 完成计划</span></div>
+          {points.length > 1 ? (
+            <div className={styles.trendBars}>
+              {points.map((item) => (
+                <div className={styles.trendGroup} key={item.id} title={`${item.period_end.slice(0, 10)}：活动 ${metric(item, 'activity_events')}，完成 ${metric(item, 'completed_plans')}`}>
+                  <div className={styles.barPair}>
+                    <i className={styles.activityBar} style={{ height: `${Math.max(4, metric(item, 'activity_events') / maxValue * 100)}%` }} />
+                    <i className={styles.completedBar} style={{ height: `${Math.max(4, metric(item, 'completed_plans') / maxValue * 100)}%` }} />
+                  </div>
+                  <small>{item.period_end.slice(5, 10)}</small>
+                </div>
+              ))}
+            </div>
+          ) : <p className={styles.trendEmpty}>再生成下一期报告后，这里会显示可比较的变化趋势。</p>}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -205,7 +257,7 @@ function ReportsPage() {
   return (
     <div className={`${styles.container} pt-12`}>
       <h2 className={styles.title}><FileText size={16} strokeWidth={1.5} className="text-slate-600" /> 科研进展报告</h2>
-      <p className={styles.subtitle}>依据平台内可验证的计划、对话与成长记录生成；未记录的进展保持 unknown。</p>
+      <p className={styles.subtitle}>依据平台内可验证的计划、对话与研究记录生成；信息不足时会明确标注，不虚构进展。</p>
       <Tabs
         activeKey={period}
         onChange={(key) => setPeriod(key as ReportPeriod)}
@@ -244,8 +296,10 @@ function ReportsPage() {
                 <span className={styles.passTag}>{reviewStatusLabel(report.review_status)}</span>
               </div>
               <div className={styles.evidenceLine}>生成：{generationLabel(report)}</div>
+              {report.is_stale && <div className={styles.staleNotice}>此报告生成后新增了 {report.newer_records_count || 1} 类计划或科研记录，建议重新生成。</div>}
+              <ReportVisuals report={report} history={reports} />
               <ReportMarkdown content={report.content_markdown} />
-              <div className={styles.evidenceLine}>证据引用：{report.evidence_refs.length ? report.evidence_refs.join('、') : '本周期无外部证据引用'}</div>
+              <div className={styles.evidenceLine}>{report.evidence_summary || '依据：本周期暂无可引用记录'}</div>
               <div className={styles.reportActions}>
                 <Button size="small" icon={<Presentation size={14} />} loading={pptGeneratingId === report.id} onClick={() => void generatePpt(report)}>
                   生成汇报 PPT

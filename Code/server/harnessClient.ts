@@ -39,6 +39,18 @@ export async function probeAgent(timeoutMs = 2500): Promise<boolean> {
   }
 }
 
+/** Liveness is intentionally separate from model readiness.  A slow gateway
+ * must not make the D side invent a local fallback before A has a chance to
+ * execute and record the real model result. */
+export async function probeAgentLiveness(timeoutMs = 2500): Promise<boolean> {
+  const base = agentBase();
+  if (!base) return false;
+  try {
+    const res = await fetch(agentUrl('/api/health'), { signal: AbortSignal.timeout(timeoutMs) });
+    return res.ok;
+  } catch { return false; }
+}
+
 function isAgentUnreachable(err: unknown): boolean {
   const parts: string[] = [];
   if (err instanceof Error) {
@@ -170,6 +182,49 @@ export async function pollHarnessResult(runId: string, created?: any, timeoutMs 
   const err = new Error('Harness AgentRun 超时，后台将在完成后补写成长状态');
   (err as Error & { status?: number }).status = 504;
   throw err;
+}
+
+/** Start an asynchronous Harness run without tying the browser request to model latency. */
+export async function launchHarnessSkill(input: {
+  userId: number; skillId: string; message: string; context: Record<string, unknown>; timeoutMs?: number;
+}): Promise<any> {
+  const trusted = loadTrustedAgentContext(input.userId);
+  const created = await postHarnessRun({
+    skill_id: input.skillId,
+    message: input.message,
+    context: {
+      ...input.context,
+      user_id: String(input.userId),
+      growth: input.context.growth ?? trusted.growth,
+      profile: input.context.profile ?? trusted.profile,
+    },
+  }, input.timeoutMs ?? 15_000);
+  if (!isNumericRunId(String(created?.run_id || ''))) {
+    const err = new Error(`${input.skillId} 未返回有效 AgentRun id`);
+    (err as Error & { status?: number }).status = 502;
+    throw err;
+  }
+  return created;
+}
+
+export async function fetchHarnessResult(runId: string): Promise<any> {
+  const response = await fetch(agentUrl(`/api/runs/${runId}/harness-result`), { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error((await response.text().catch(() => '')).slice(0, 300) || '读取 Harness 结果失败');
+  return response.json();
+}
+
+export async function fetchHarnessEvents(runId: string, afterSequence?: number): Promise<any[]> {
+  const suffix = afterSequence ? `?after_sequence=${afterSequence}` : '';
+  const response = await fetch(agentUrl(`/api/runs/${runId}/events${suffix}`), { signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return Array.isArray(payload) ? payload : [];
+}
+
+export async function cancelHarnessRun(runId: string): Promise<any> {
+  const response = await fetch(agentUrl(`/api/runs/${runId}/cancel`), { method: 'POST', signal: AbortSignal.timeout(10_000) });
+  if (!response.ok) throw new Error((await response.text().catch(() => '')).slice(0, 300) || '取消 Harness 任务失败');
+  return response.json();
 }
 
 export function paperGrowthPatch(runId: string, candidateId: string, result: any): ReviewedGrowthWrite['patch'] {
