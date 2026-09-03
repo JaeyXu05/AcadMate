@@ -281,6 +281,25 @@ _BOILERPLATE_TOPIC_MARKERS = (
 # 完全等于这些片段的短词也不构成研究方向（多为模板残留）。
 _BOILERPLATE_TOPIC_EXACT = {"more", "gallery", "news", "vacancy"}
 _POSTAL_CODE_TOPIC = re.compile(r"(?:邮\s*编|邮政编码).{0,12}\d{5,6}|^\d{6}$")
+_DIRTY_TOPIC_EXACT = {
+    "教学信息", "指导研究生及博士后", "在读研究生", "新闻", "新闻动态",
+    "总访问量", "日访问量", "实验室概况", "研究兴趣",
+    "主要研究方向但不局限于以下", "1）主要研究方向但不局限于以下",
+}
+_DIRTY_TOPIC_PATTERNS = (
+    re.compile(r"^(?:总|日)?访问量(?:[:：]?\s*\d+)?$"),
+    re.compile(r"^中国科学技术大学.{0,30}(?:学院|实验室|中心)$"),
+    re.compile(r"^中国科学院青年促进会(?:优秀)?会员"),
+    re.compile(r"^[A-Za-z0-9＋+_-]{2,20}实验室$"),
+)
+_TOPIC_SENTENCE_NOISE = re.compile(
+    r"(?:招收|招生|研究生课程|开设课程|在线阅读链接|访问量|新闻动态|会员（?\d{4})"
+)
+_TOPIC_LINK_OR_PAPER = re.compile(
+    r"(?:https?://|\bDOI\s*:|^[“\"‘'].{25,}[”\"’'](?:[,，.]|\s*$)|"
+    r"\b(?:Adv\. Mater|Angew\. Chem|Science|Ultramicroscopy)\b.{0,40}(?:\b20\d{2}\b|\b\d{1,4}\s*(?:[,(:]|$)))",
+    re.IGNORECASE,
+)
 
 # 「成果/项目/荣誉」句判别标记：导师个人主页的「研究方向」段常紧跟一段
 # 论文/项目/获奖叙述（如「主持/参与国家自然科学基金…」「在研项目」「多项竞赛中获奖」）。
@@ -330,6 +349,27 @@ def _is_boilerplate_topic(topic: str) -> bool:
     return any(marker in topic for marker in _BOILERPLATE_TOPIC_MARKERS)
 
 
+def _clean_topic(topic: object) -> str | None:
+    text = " ".join(str(topic or "").split()).strip(" []()（）.。:：-*；;")
+    if not text:
+        return None
+    text = re.sub(r"^\d+[)）.、]\s*", "", text).strip()
+    text = re.sub(r"^(?:主要)?研究方向(?:包括|为|但不局限于以下)?\s*[:：]?\s*", "", text)
+    if not text or text in _DIRTY_TOPIC_EXACT:
+        return None
+    if _is_boilerplate_topic(text) or _is_achievement_topic(text):
+        return None
+    if any(pattern.search(text) for pattern in _DIRTY_TOPIC_PATTERNS):
+        return None
+    if _TOPIC_SENTENCE_NOISE.search(text):
+        return None
+    if _TOPIC_LINK_OR_PAPER.search(text):
+        return None
+    if re.search(r"\b(?:I've been|I have been)\b.{0,40}\bprofessor\b", text, re.I):
+        return None
+    return text
+
+
 def _split_topics(value: str) -> list[str]:
     cleaned = re.sub(
         r"(?:社会兼职|团队成员|教育经历|工作经历|科研项目|论文成果).*$",
@@ -341,13 +381,12 @@ def _split_topics(value: str) -> list[str]:
     result: list[str] = []
     for part in parts:
         topic = re.sub(r"^\[?\d+\]?[.)、]?\s*", "", part)
-        topic = topic.strip(" []()（）.。:：-*")
+        topic = _clean_topic(topic)
         if (
-            2 <= len(topic) <= 120
+            topic is not None
+            and 2 <= len(topic) <= 120
             and "暂无内容" not in topic
             and topic.casefold() not in {"research focus", "research interests"}
-            and not _is_boilerplate_topic(topic)
-            and not _is_achievement_topic(topic)
         ):
             result.append(topic)
     return result
@@ -414,8 +453,22 @@ def _recruitment_status(text: str) -> str | None:
     return None
 
 
-def _role_verified_from_text(text: str) -> bool:
-    return any(token in text for token in ("博士生导师", "硕士生导师", "博导", "硕导"))
+def _role_from_text(name: str, text: str) -> str | None:
+    """只接受官方主页中的强身份陈述，避免“同专业博导”推荐组件造成误判。"""
+    cleaned = re.sub(r"[PM]同专业[博硕]导", "", text or "")
+    role = r"(博士生导师|硕士生导师|博导|硕导)"
+    title = r"(?:讲席教授|特任教授|副教授|教授|特任研究员|副研究员|研究员|正高级工程师)"
+    for pattern in (
+        rf"{re.escape(name)}.{{0,150}}?{role}",
+        rf"(?:现任|现为).{{0,100}}?{title}.{{0,20}}?{role}",
+        rf"{title}[、，,\s]{{0,6}}{role}",
+        rf"受聘{role}岗位",
+        rf"(?:担任|聘为).{{0,50}}?{role}",
+    ):
+        match = re.search(pattern, cleaned, flags=re.DOTALL)
+        if match:
+            return match.groups()[-1]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -466,9 +519,8 @@ def _process_record(
             f"[{scope_label}] {record['name']} 主页抓取/解析失败: "
             f"{type(exc).__name__}: {exc}"
         )
-    role_verified = bool(
-        record["mentor_role_verified"] or _role_verified_from_text(profile_text)
-    )
+    profile_role = _role_from_text(record["name"], profile_text)
+    role_verified = bool(record["mentor_role_verified"] or profile_role)
     if not role_verified:
         return None, False
     record.update(
@@ -477,6 +529,12 @@ def _process_record(
             "recruitment_status": recruitment_status,
             "profile_text": profile_text,
             "affiliation": USTC_AFFILIATION,
+            "mentor_role": record.get("mentor_role") or profile_role or "",
+            "mentor_role_verified": True,
+            "mentor_role_verification_source": (
+                "official_directory_fields"
+                if record.get("mentor_role_verified") else "official_profile_text_strong"
+            ),
         }
     )
     if delay:

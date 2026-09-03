@@ -405,7 +405,11 @@ class MatchDimensionScores(BaseModel):
 
 class MatchResult(BaseModel):
     candidate_id: str
+    # ``total_score`` remains the user-facing, evidence-backed topic match.
+    # ``rank_score`` is an internal tie-break score for explicit, verified
+    # preferences and must never be presented as the same metric.
     total_score: float = Field(ge=0, le=100)
+    rank_score: float | None = Field(default=None, ge=0, le=100)
     dimension_scores: MatchDimensionScores
     rationale: list[str] = Field(default_factory=list)
     negative_factors: list[str] = Field(default_factory=list)
@@ -482,6 +486,7 @@ class FinalResult(BaseModel):
     )
     quality_status: str = "PASS"
     coverage_report: dict[str, Any] = Field(default_factory=dict)
+    no_match_diagnostics: dict[str, Any] = Field(default_factory=dict)
     relation_judgements: list[dict[str, str | int | float | bool]] = Field(
         default_factory=list
     )

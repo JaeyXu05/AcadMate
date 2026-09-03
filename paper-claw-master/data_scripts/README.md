@@ -91,7 +91,7 @@ python data_scripts/semantic_scholar_scraper.py --limit 0 --max-papers 10 --dela
 - 输出 `data/ustc_mentor_papers_s2.json`，字段对齐 `openalex_scraper` 输出
   （`s2_author_id` / `s2_exact_match` / `s2_paper_count` / `s2_cited_by_count`）。
 - 结尾打印可行性汇总：resolved/exact/fuzzy/miss 计数 + 样例论文。
-- **暂不并入 RAG**（留待人工裁决后统一合并）。
+- 已由 `build_rag.py` 并入 RAG；作者冲突或非精确命中必须经人工裁决，未裁决证据不参与候选字段且会使正式验证失败。
 
 ### 4. DBLP 论文（扩展平台）
 
@@ -110,7 +110,7 @@ python data_scripts/dblp_scraper.py --limit 0 --max-papers 10 --delay 0.5
 - DBLP 无被引量字段，按年份取论文（与 OpenAlex/S2 按被引取互补）。
 - 仅覆盖 CS 学科，命中集中在 CS/AI/EE 学院——预期行为。
 - 输出 `data/ustc_mentor_papers_dblp.json`（`dblp_pid` / `dblp_exact_match` / `papers[]`）。
-- **暂不并入 RAG**。
+- 已由 `build_rag.py` 并入 RAG；作者状态和跨平台一致性由构建阶段统一裁决。
 
 ### 5. 组装 RAG 库
 
@@ -134,6 +134,14 @@ python data_scripts/build_rag.py
   研究方向对比命中论文标题，按三态处理——同语言却无重叠判"同名错配"丢弃该平台
   论文证据；跨语言（如中文方向 vs 英文论文）无法判定则保留并记 warning 待人工裁决；
   有重叠或导师无官网方向则保留。
+- **正文清洗**：剔除页面导航、栏目标题、访问计数、课程/招聘/链接等模板噪声；
+  “导航与制导”“视觉导航”等科研术语通过上下文白名单保留。
+- **导师身份恢复**：只接受目录结构字段或官方主页中的强身份语句；同专业导师推荐
+  小组件不作为依据。当前 721 条由结构字段核验，另有 251 条由官方主页强语句或人工官网复核恢复，2 条证据不足未进仓。
+- **论文语义**：确认作者的代表作写入 `publications`；歧义作者必须由
+  `manual_overrides.json` 裁决。DOI/平台 ID/规范化标题用于跨平台去重，总论文数与代表作数分开记录。
+- 当前正式库（2026-09-03）：**972 位导师 / 1969 条证据**；668 位有研究方向，
+  259 位有确认论文，758 位有清洗后的主页简介；论文 pending_review 为 0。
 
 ## 自检
 
@@ -143,9 +151,9 @@ python data_scripts/build_rag.py
 python data_scripts/verify_rag.py
 ```
 
-4 项检查：A. schema 合规（后端环境走严格 model_validate，否则手写校验）
-B. 证据引用闭环（无悬空/孤儿）C. 跳过外部源条件（合格候选有身份核验证据）
-D. 召回升单测（需后端完整依赖，conda 环境会 SKIP）。全 PASS 即可。
+A–G 七项检查：schema 合规、证据引用闭环、身份跳源条件、召回回归、覆盖率软门禁、
+检索质量门禁、论文/简介语义元数据门禁。后端依赖不可用时 D/F 使用纯标准库回退，
+不会再因环境缺包而跳过核心质量检查。全 PASS 即可。
 
 ## 模糊命中人工裁决
 
@@ -171,7 +179,8 @@ python data_scripts/export_fuzzy_review.py --papers data/ustc_mentor_papers.json
 - 某平台裁决为 `null` → 跳过该导师在该平台的论文抓取（无需再网络请求）。
 - 裁决为确定的 author id / s2 id / dblp pid → 直接用该 id 抓论文，覆盖自动解析。
 - 用 `--overrides <path>` 可指定别的文件（默认 `data/manual_overrides.json`）。
-- `build_rag.py` 聚合各平台产出时天然继承这些裁决（被跳过的平台无论文记录）。
+- `build_rag.py` 会直接读取同一裁决文件，因此无需先重抓平台数据；可用
+  `--paper-overrides <path>` 指定其它裁决文件。命中 ID 与裁决不一致时会拒绝旧记录并提示重抓。
 
 ## 接入工作流
 

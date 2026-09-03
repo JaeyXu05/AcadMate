@@ -24,7 +24,10 @@ class OfflineResearchTool:
             source_type="ustc_official_faculty_profile",
             source_uri="fixture://mentor-api-1",
             title="Verified MARL Paper",
-            extracted_fact="Professor A authored verified work on multi-agent reinforcement learning.",
+            extracted_fact=(
+                "Professor A authored verified work on multi-agent reinforcement "
+                "learning and graph learning."
+            ),
             locator="fixture:1",
             freshness=EvidenceFreshness.current,
             confidence=0.95,

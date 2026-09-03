@@ -25,6 +25,14 @@ def test_clean_topics_drops_homepage_template_residue():
     assert cleaned == ["微分方程动力学", "动力系统"]
 
 
+def test_clean_topics_drops_navigation_year_and_dangling_sentences():
+    cleaned = clean_topics(
+        ["联系我们", "2022", "ICML", "用于检测", "量子信息"]
+    )
+
+    assert cleaned == ["量子信息"]
+
+
 def test_mean_score_is_research_topic_match_not_eight_way_average():
     scores = MatchDimensionScores(
         research_topic_match=13.17,

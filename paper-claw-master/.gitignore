@@ -30,6 +30,8 @@ backend/.venv/
 data/*
 !data/.gitkeep
 !data/ustc_mentor_rag.json
+!data/manual_overrides.json
+!data/mentor_role_overrides.json
 
 # Notebook
 notebooks/

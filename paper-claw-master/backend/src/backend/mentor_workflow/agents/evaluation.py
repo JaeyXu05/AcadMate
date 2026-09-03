@@ -99,10 +99,12 @@ class MatchingAgent:
                 risks.append(
                     "Recruitment status is not verified and must not be assumed."
                 )
+            rank_score, rank_breakdown = self.rank_score(intent, candidate, dimensions)
             provisional.append(
                 MatchResult(
                     candidate_id=candidate.candidate_id,
                     total_score=dimensions.mean_score(),
+                    rank_score=rank_score,
                     dimension_scores=dimensions,
                     rationale=rationale,
                     negative_factors=negative_factors,
@@ -121,16 +123,79 @@ class MatchingAgent:
                     ranking_position=1,
                     match_type=match_type,
                     confidence=round(topic_match / 100.0, 4),
-                    score_breakdown=score_breakdown,
+                    score_breakdown={**score_breakdown, **rank_breakdown},
                 )
             )
         ranked = sorted(
-            provisional, key=lambda item: (-item.total_score, item.candidate_id)
+            provisional,
+            key=lambda item: (-(item.rank_score or item.total_score), -item.total_score, item.candidate_id),
         )
         return [
             item.model_copy(update={"ranking_position": index})
             for index, item in enumerate(ranked, start=1)
         ]
+
+    @staticmethod
+    def rank_score(
+        intent: IntentPacket,
+        candidate: CandidateMentor,
+        dimensions: MatchDimensionScores,
+    ) -> tuple[float, dict[str, float]]:
+        """Rank eligible mentors without changing the displayed topic score.
+
+        A missing or unverified optional field is neutral: it cannot create a
+        fictional advantage or penalty.  Only a dimension explicitly requested
+        by the user *and* available on the candidate may adjust the order.
+        """
+
+        topic_score = dimensions.research_topic_match
+        score = topic_score
+        applied_weight = 0.0
+        components: dict[str, float] = {"eligibility_score": topic_score}
+
+        def apply(name: str, weight: float, value: float, available: bool) -> None:
+            nonlocal score, applied_weight
+            if not available:
+                return
+            score += weight * (value - topic_score)
+            applied_weight += weight
+            components[f"rank_{name}"] = value
+            components[f"rank_weight_{name}"] = weight
+
+        apply(
+            "method",
+            0.15,
+            dimensions.method_match,
+            bool(intent.methods and candidate.methods),
+        )
+        apply(
+            "application",
+            0.10,
+            dimensions.application_match,
+            bool(
+                intent.application_domains
+                and getattr(candidate, "application_domains", [])
+            ),
+        )
+        explicit_constraints = bool(
+            intent.constraints.departments
+            or intent.constraints.mentor_names
+            or intent.constraints.candidate_ids
+            or intent.constraints.recruitment_required
+        )
+        apply(
+            "constraint",
+            0.05,
+            dimensions.constraint_satisfaction,
+            explicit_constraints
+            and (
+                not intent.constraints.recruitment_required
+                or candidate.recruitment_status is not None
+            ),
+        )
+        components["rank_applied_weight"] = round(applied_weight, 4)
+        components["rank_score"] = round(max(0.0, min(100.0, score)), 2)
+        return components["rank_score"], components
 
 
 class EvidenceReviewAgent:
@@ -369,9 +434,7 @@ def _match_inconsistency(
             checks.append(f"rationale_evidence:{match.candidate_id}")
     expected_order = [
         match.candidate_id
-        for match in sorted(
-            matches, key=lambda item: (-item.total_score, item.candidate_id)
-        )
+        for match in sorted(matches, key=lambda item: (-(item.rank_score or item.total_score), -item.total_score, item.candidate_id))
     ]
     actual_order = [
         match.candidate_id

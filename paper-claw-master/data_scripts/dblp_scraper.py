@@ -18,7 +18,7 @@
   ``<r>/<article|inproceedings>`` 的 ``<title>/<year>/<journal|booktitle>/<ee>``，
   按 ``year`` 降序取前 N。
 - 容错 + 断点续抓：已有且非空 ``papers`` 跳过；429 退避重试。
-- **暂不并入 RAG**：仅产出独立 JSON，留待人工裁决后统一合并。
+- 产出独立 JSON，由 ``build_rag.py`` 统一做作者状态裁决后并入 RAG。
 - DBLP 仅覆盖 CS，命中集中在 CS/AI/EE 学院——预期行为，未命中者多为非 CS 学科。
 """
 

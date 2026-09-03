@@ -79,6 +79,42 @@ def _readiness_payload() -> dict[str, object]:
     }
 
 
+def _mentor_readiness_payload() -> dict[str, object]:
+    """Readiness for the deterministic mentor workflow, not every AI feature.
+
+    Mentor matching defaults to an offline, evidence-backed workflow.  A chat
+    provider is required only when model reasoning is explicitly enabled, so
+    conflating it with the generic application readiness incorrectly makes the
+    search UI reject a healthy deterministic backend.
+    """
+
+    database_ok = False
+    database_error: str | None = None
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        database_ok = True
+    except Exception as exc:
+        database_error = type(exc).__name__
+
+    settings = get_settings()
+    model_reasoning = settings.mentor_workflow_model_reasoning_enabled
+    chat_reachable, chat_error = _chat_readiness()
+    ready = database_ok and (not model_reasoning or chat_reachable)
+    return {
+        "status": "ready" if ready else "not_ready",
+        "ready": ready,
+        "mode": "model_reasoning" if model_reasoning else "deterministic",
+        "dependencies": {
+            "database": database_ok,
+            "chat_required": model_reasoning,
+            "chat_reachable": chat_reachable,
+        },
+        "database_error": database_error,
+        "chat_error": chat_error,
+    }
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Paper Claw API")
     register_error_handlers(app)
@@ -92,6 +128,14 @@ def create_app() -> FastAPI:
     @app.get("/api/ready")
     def ready() -> JSONResponse:
         payload = _readiness_payload()
+        return JSONResponse(
+            status_code=200 if payload["ready"] else 503,
+            content=payload,
+        )
+
+    @app.get("/api/mentor-ready")
+    def mentor_ready() -> JSONResponse:
+        payload = _mentor_readiness_payload()
         return JSONResponse(
             status_code=200 if payload["ready"] else 503,
             content=payload,

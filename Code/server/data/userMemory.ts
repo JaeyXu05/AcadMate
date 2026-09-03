@@ -67,7 +67,9 @@ export function loadRecommendMemory(userId: number): RecommendMemory {
     8,
   );
   const recent = uniqueCap(sessionInterestTerms(recentSearchQueries(userId, 2)), 2);
-  const core = uniqueCap([...longTerm, ...recent], 8);
+  // Recent searches express the current session goal, so they lead the
+  // recommendation signal list while long-term interests still supply breadth.
+  const core = uniqueCap([...recent, ...longTerm], 8);
   return { longTerm, recent, core };
 }
 

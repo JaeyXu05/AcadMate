@@ -83,7 +83,7 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
   | `title` | `candidate.source_metadata?.academic_title ?? ''` | 职称 |
   | `department` | `candidate.department ?? ''` | |
   | `tags` | `candidate.research_topics ?? []` | 研究方向 |
-  | `papers` | `candidate.publications.length` | 论文数 |
+  | `papers` | `source_metadata.publication_total_count`，回退 `candidate.publications.length` | 论文总数；代表作只作展示 |
   | `matchScore` | `Math.round(match.total_score ?? 0)` | 匹配度 0~100 |
   | `explanation` | `match.rationale`（数组→换行拼接）| 匹配说明 |
   | `hIndex` | `undefined` | **始终置空** |
@@ -121,7 +121,7 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 - **`CloudGraph.tsx`**（Three.js，591 行）：`InstancedMesh` + 自定义 `ShaderMaterial`（billboard + 呼吸脉动），背景装饰用 `SPIRAL={r_in:170, r_out:540, turns:1.4, arms:6}` 画旋臂星尘/星云/中央亮核（**此 `arms:6` 仅为背景装饰，与 B 的 `build_cloud.py` 节点布局 `N_ARMS=4` 无关**）。节点坐标用 `cloud_data.json` 预计算值，组件不复算。交互：拖拽/缩放/自动缓旋、悬停浮卡、点击选中（按边高亮邻居）。
 - **契约类型**：`Code/src/types/` 定义 `Advisor`/`CloudNode`/`AdvisorDetail` 等；`Code/src/services/` 是预留字段映射位（组件零改动）。`Advisor` 关键字段：`id/name/title/department/tags[]/hIndex?/papers/matchScore/explanation?`。`SseEventType = 'thinking'|'result'|'summary'|'done'|'error'|'stage'`；`SortBy = 'match'|'staffId'|'papers'|'department'`。
 
-> 说明：`WelcomePage.tsx` 写死的 stats 文案原为 `1523 结构化证据`，已更正为 `1580`（2026-08-22）。
+> 说明：检索/详情当前读 972/1969 RAG；Welcome 页静态统计和 715 节点云图仍是历史展示快照，不应当作当前检索库口径。
 
 ## .env 变量
 
@@ -136,5 +136,5 @@ SSE 流式，限流 12/min/IP。D 作为代理转发给 A：
 
 ## 已知缺口
 
-- hIndex 全链路无数据（已去展示）；215 位导师无 `research_topics`。
+- hIndex 全链路无数据（已去展示）；当前 304 位导师无 `research_topics`，另有 2 位导师身份因证据不足未进仓。
 - `CloudGraph.tsx` 背景装饰 `arms:6` 与 B 布局 `N_ARMS=4` 不一致（仅观感，可择机统一）。

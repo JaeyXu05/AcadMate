@@ -1,6 +1,6 @@
 """RAG 库自检脚本（只读，不联网）。
 
-对 ``data/ustc_mentor_rag.json`` 跑 4 项检查，每项打印 PASS/FAIL，最后给汇总：
+对 ``data/ustc_mentor_rag.json`` 跑 A–G 七项检查，每项打印 PASS/FAIL，最后给汇总：
 
   A. schema 合规    —— 每条 CandidateMentor / EvidenceRecord 能通过后端 pydantic
                        model_validate；后端不可 import 时降级为手写字段校验。
@@ -9,6 +9,9 @@
   C. 跳过外部源条件 —— 抽样"有研究方向+有证据"的导师，验证其证据含
                        identity_verified=true 且 mentor_role_verified≠False。
   D. 召回升单测     —— 用几个已知方向词跑 retrieve()，确认能召回对应导师。
+  E. 覆盖率软门禁   —— 汇报关键字段覆盖率，不把数据稀疏误判为结构损坏。
+  F. 检索质量门禁   —— 检查导航垃圾召回，并验证视觉/强化学习等代表查询。
+  G. 语义元数据门禁 —— 检查作者状态、论文计数、pending 证据和简介模板残留。
 
 用法：
   python data_scripts/verify_rag.py [--rag data/ustc_mentor_rag.json]
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -238,9 +242,9 @@ def check_recall(
     try:
         from internal_mentor_rag import FileInternalMentorRag  # noqa: E402
         from backend.mentor_workflow.schemas import IntentPacket, MentorGoal  # noqa: E402
-    except Exception as exc:  # noqa: BLE001 - 后端依赖缺失时跳过，不算失败
-        rep.add_skip("D. 召回升单测", f"环境缺后端依赖，跳过: {exc}")
-        return
+        backend_available = True
+    except Exception:  # noqa: BLE001 - 轻量环境走纯字典回退，不再跳过
+        backend_available = False
 
     # 自动构造测试用例：挑几个有明确研究方向的导师，用其方向词反查。
     test_cases: list[tuple[str, str]] = []  # (query, expected_name)
@@ -259,21 +263,35 @@ def check_recall(
         rep.add("D. 召回升单测", False, "无可构造的召回用例（无研究方向导师）")
         return
 
-    rag = FileInternalMentorRag(rag_path)
+    rag = FileInternalMentorRag(rag_path) if backend_available else None
     failed: list[str] = []
     for query, expected in test_cases:
-        intent = IntentPacket(
-            trace_id="verify-recall",
-            goal=MentorGoal.find_mentors,
-            research_topics=[query],
-            confidence=1.0,
-        )
-        result = rag.retrieve(intent, [])
-        names = {c.mentor_name for c in result.candidates}
+        if backend_available:
+            intent = IntentPacket(
+                trace_id="verify-recall",
+                goal=MentorGoal.find_mentors,
+                research_topics=[query],
+                confidence=1.0,
+            )
+            result = rag.retrieve(intent, [])
+            names = {c.mentor_name for c in result.candidates}
+        else:
+            q = re.sub(r"\s+", "", query.casefold())
+            names = {
+                str(c.get("mentor_name") or "") for c in candidates
+                if q in re.sub(
+                    r"\s+", "", " ".join([
+                        *map(str, c.get("research_topics") or []),
+                        *map(str, c.get("methods") or []),
+                        *map(str, c.get("publications") or []),
+                    ]).casefold(),
+                )
+            }
         if expected not in names:
             failed.append(f"查'{query}'未召回{expected}")
     ok = not failed
-    detail = f"{len(test_cases)} 个用例，失败 {len(failed)}"
+    mode = "后端检索" if backend_available else "stdlib 轻量召回"
+    detail = f"{len(test_cases)} 个用例，失败 {len(failed)}（{mode}）"
     if failed:
         detail += "；" + "; ".join(failed[:3])
     rep.add("D. 召回升单测", ok, detail)
@@ -303,6 +321,28 @@ _COVERAGE_BOILERPLATE = (
     "招生信息",
     "邮政编码",
     "手机版",
+    "访问量",
+    "在线阅读链接",
+    "欢迎点赞",
+    "优秀实习生",
+    "评审委员会",
+    "谷歌学术引用",
+    "Honors & Awards",
+    "Social Affiliations",
+)
+_DIRTY_TOPIC_EXACT = {
+    "教学信息", "指导研究生及博士后", "在读研究生", "新闻", "新闻动态",
+    "总访问量", "日访问量", "实验室概况", "研究兴趣",
+    "主要研究方向但不局限于以下", "1）主要研究方向但不局限于以下",
+}
+_DIRTY_TOPIC_PATTERNS = (
+    re.compile(r"^中国科学技术大学.{0,30}(?:学院|实验室|中心)$"),
+    re.compile(r"^中国科学院青年促进会(?:优秀)?会员"),
+    re.compile(r"^[A-Za-z0-9＋+_-]{2,20}实验室$"),
+    re.compile(r"(?:招收|招生|研究生课程|开设课程).{0,80}(?:博士|硕士|研究生|学生|课程)"),
+    re.compile(r"^已在\s*(?:IEEE|ACM|Science|Nature)\b", re.I),
+    re.compile(r"^(?:IEEE\s+Trans\..*|Pattern\s+Recognition|Science|Nature\s+Photonics|Physical\s+Review\s+Letters|ICIP\s+\d{4})$", re.I),
+    re.compile(r"^\d{2}-\d{2}$"),
 )
 
 
@@ -332,7 +372,11 @@ def check_coverage(candidates: list[dict], rep: Report) -> None:
         1
         for c in candidates
         for t in (c.get("research_topics") or [])
-        if any(m in t for m in _COVERAGE_BOILERPLATE)
+        if (
+            t in _DIRTY_TOPIC_EXACT
+            or any(m in t for m in _COVERAGE_BOILERPLATE)
+            or any(pattern.search(t) for pattern in _DIRTY_TOPIC_PATTERNS)
+        )
     )
     if garbage:
         misses.append(f"研究方向含 {garbage} 条模板残留")
@@ -347,13 +391,87 @@ def check_coverage(candidates: list[dict], rep: Report) -> None:
         rep.add("E. 覆盖率门禁", True, detail)
 
 
-def check_retrieval_quality(rag_path: Path, rep: Report) -> None:
+def check_semantic_metadata(candidates: list[dict], evidence: list[dict], rep: Report) -> None:
+    """纯 stdlib 语义门禁：论文口径、作者审核状态与候选字段必须一致。"""
+    failures: list[str] = []
+    paper_evidence = [
+        item for item in evidence
+        if str(item.get("source_type") or "").endswith("_paper_metadata")
+    ]
+    pending_count = 0
+    for item in paper_evidence:
+        metadata = item.get("metadata") or {}
+        status = metadata.get("author_match_status")
+        if status not in {"confirmed", "pending_review"}:
+            failures.append(f"{item.get('evidence_id')}: author_match_status={status!r}")
+        if "author_match_exact" not in metadata:
+            failures.append(f"{item.get('evidence_id')}: 缺 author_match_exact")
+        if "retrieved_representative_count" not in metadata:
+            failures.append(f"{item.get('evidence_id')}: 缺代表作条数")
+        if "paper_count" in metadata:
+            failures.append(f"{item.get('evidence_id')}: 仍使用歧义 paper_count")
+        supports = str(metadata.get("supports_fields") or "")
+        if status == "pending_review" and supports:
+            failures.append(f"{item.get('evidence_id')}: 待审核证据不应支持候选字段")
+        if status == "pending_review":
+            pending_count += 1
+
+    if pending_count:
+        failures.append(f"仍有 {pending_count} 条论文证据待人工审核")
+
+    for candidate in candidates:
+        metadata = candidate.get("source_metadata") or {}
+        representative = len(candidate.get("publications") or [])
+        if metadata.get("representative_publication_count") != representative:
+            failures.append(
+                f"{candidate.get('candidate_id')}: 代表作口径 "
+                f"{metadata.get('representative_publication_count')} != {representative}"
+            )
+        total = metadata.get("publication_total_count")
+        if total is not None and (not isinstance(total, int) or total < 0):
+            failures.append(f"{candidate.get('candidate_id')}: 非法论文总数 {total!r}")
+        bio = str(metadata.get("profile_bio") or "")
+        if any(marker in bio for marker in ("同专业博导", "同专业硕导", "总访问量", "日访问量")):
+            failures.append(f"{candidate.get('candidate_id')}: bio 含站点模板")
+
+    detail = f"论文证据 {len(paper_evidence)} 条，语义错误 {len(failures)}"
+    if failures:
+        detail += "；" + "; ".join(failures[:5])
+    rep.add("G. 论文语义门禁", not failures, detail)
+
+
+def check_retrieval_quality(
+    rag_path: Path, candidates: list[dict], rep: Report
+) -> None:
     """可证伪检索门禁：垃圾查询不得入榜；词法命中才算内部召回。"""
     try:
         from data_scripts.internal_mentor_rag import FileInternalMentorRag
         from backend.mentor_workflow.schemas import IntentPacket, MentorGoal
-    except Exception as exc:  # noqa: BLE001
-        rep.add_skip("F. 检索质量", f"无法导入 retrieve: {exc}")
+    except Exception:  # noqa: BLE001
+        def lightweight_count(terms: list[str]) -> int:
+            normalized = [re.sub(r"\s+", "", term.casefold()) for term in terms]
+            count = 0
+            for candidate in candidates:
+                blob = re.sub(
+                    r"\s+", "", " ".join([
+                        *map(str, candidate.get("research_topics") or []),
+                        *map(str, candidate.get("methods") or []),
+                        *map(str, candidate.get("publications") or []),
+                    ]).casefold(),
+                )
+                if any(term and term in blob for term in normalized):
+                    count += 1
+            return count
+
+        garbage_n = lightweight_count(["不存在的方向xyz"])
+        vision_n = lightweight_count(["计算机视觉", "三维视觉"])
+        rl_n = lightweight_count(["强化学习"])
+        ok = garbage_n == 0 and vision_n > 0 and rl_n > 0
+        rep.add(
+            "F. 检索质量",
+            ok,
+            f"stdlib 回退：垃圾召回 {garbage_n}，视觉 {vision_n}，强化学习 {rl_n}",
+        )
         return
 
     rag = FileInternalMentorRag(rag_path)
@@ -418,7 +536,8 @@ def main() -> None:
     check_skip_conditions(candidates, evidence, rep)
     check_recall(candidates, evidence, rep, args.rag)
     check_coverage(candidates, rep)
-    check_retrieval_quality(args.rag, rep)
+    check_retrieval_quality(args.rag, candidates, rep)
+    check_semantic_metadata(candidates, evidence, rep)
     rep.summary()
 
 

@@ -109,7 +109,7 @@ function AdvisorDetailPage() {
     );
   }
 
-  const scorePercent = Math.round(advisor.matchScore);
+  const scorePercent = Math.round(advisor.matchScore * 10) / 10;
 
   return (
     <div className={styles.container}>

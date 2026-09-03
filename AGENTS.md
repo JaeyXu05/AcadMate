@@ -5,13 +5,13 @@
 >
 > - 想看代码级全景汇总 → 根目录 `项目全景梳理报告.md`。
 > - 想看某模块细节 → 下表"细节文档"列指向的文件。
-> - 数据基准：2026-08-21 通读；RAG 库以磁盘 `paper-claw-master/data/ustc_mentor_rag.json`（generated_at 2026-08-08）为准。
+> - 数据基准：2026-09-02；RAG 库以磁盘 `paper-claw-master/data/ustc_mentor_rag.json` 为准。
 
 ---
 
 ## 一句话
 
-学生登录网站 → 输入研究兴趣 → A 多智能体从当前进仓 **180** 位导师中匹配打分 → 展示卡片 / 详情 / 收藏 / 邮件；3D 星图仍渲染 **715** 节点快照。
+学生登录网站 → 输入研究兴趣 → A 多智能体从当前进仓 **972** 位已核验导师中匹配打分 → 展示卡片 / 详情 / 收藏 / 邮件；3D 星图仍渲染独立的 **715** 节点历史快照。
 
 ## 四模块分工
 
@@ -33,30 +33,31 @@
 
 ## 核心数据事实（核对磁盘 JSON，非文档）
 
-> **口径拆分**：当前进仓检索语料 `paper-claw-master/data/ustc_mentor_rag.json` 为 **180 导师 / 358 证据**。下表与 `cloud3d/cloud_data.json` 仍是星图用的 **715 / 1580** 原快照，不要把星图改成 180。
+> **口径拆分**：当前进仓检索语料 `paper-claw-master/data/ustc_mentor_rag.json` 为 **972 导师 / 1969 证据**；`cloud3d/cloud_data.json` 仍是独立的 **715 节点历史快照**，是否扩容星图需单独产品决策。
 
-RAG 库历史全量快照（星图 `cloud_data.json` 据此生成，generated_at 以星图文件为准）：
+当前 RAG 库（2026-09-03 人工复核后重建）：
 
 | 项 | 值 |
 |---|---|
-| 导师数 | **715** |
-| 证据数 | **1580**（旧文档写 1523 是上一版 `.bak`，已过时） |
-| 有 `research_topics` | **500 / 715**（434 来自官网 profile + 66 论文标题回填） |
-| 有 `publications` | 231 / 715 |
-| 有 `methods` | 39 / 715 |
-| 有 `recruitment_status` | 78 / 715 |
-| 有 `source_metadata.academic_title` | 708 / 715 |
+| 导师数 | **972**（721 结构字段核验 + 251 官方主页强身份语句核验；另 2 位证据不足未进仓） |
+| 证据数 | **1969** |
+| 有 `research_topics` | **668 / 972**（597 来自官网 profile + 71 由高特异性论文词回填） |
+| 有 `publications` | 259 / 972（只含 author match 已确认的代表作） |
+| 有 `methods` | 45 / 972 |
+| 有 `recruitment_status` | 107 / 972 |
+| 有 `profile_bio` / `profile_email` | 758 / 972；193 / 972 |
 | `homepage`/`department`/`affiliation` | 100% |
 | `source_chain` | `["internal_ustc_rag"]` |
-| `topics_source` 分布 | 0 无方向 215 / 1 来自 profile 434 / 2 论文回填 66 |
-| 证据按 `source_type` | 身份 715 + profile 514 + openalex 128 + s2 214 + dblp 9 = 1580 |
+| `topics_source` 分布 | 0 无方向 304 / 1 来自 profile 597 / 2 论文回填 71 |
+| 证据按 `source_type` | 身份 972 + profile 630 + openalex 200 + s2 150 + dblp 17 = 1969 |
+| 论文证据状态 | confirmed 367 / pending_review 0；191 个歧义平台命中已人工裁决（41 保留 / 150 排除） |
 
 candidate 字段：`candidate_id / mentor_name / affiliation / department / research_topics / methods / publications / projects / homepage / recruitment_status / evidence_refs / missing_fields / source_metadata{ustc_faculty_id, english_name, academic_title, mentor_role, paper_platforms, topics_source}`，全部与 A 后端 schema（`mentor_workflow/schemas.py` 的 `CandidateMentor`/`EvidenceRecord`）对齐。
 
 ## 数据流总览
 
 ```
-[官网/论文平台] --C抓取--> data/ustc_mentor_rag.json (检索 180/358；星图快照仍为 715/1580)
+[官网/论文平台] --C抓取--> data/ustc_mentor_rag.json (检索 972/1969；星图仍为 715 节点历史快照)
                                     │
         ┌───────────────────────────┼────────────────────────────┐
         ▼                           ▼                            ▼
@@ -83,7 +84,7 @@ candidate 字段：`candidate_id / mentor_name / affiliation / department / rese
 
 | # | 旧文档写法 | 代码/数据实际 |
 |---|---|---|
-| 1 | 证据 1523 / 有方向 437 | **1580 / 500**（当前 JSON） |
+| 1 | 证据 1523/1580、导师 715 | **972 导师 / 1969 证据 / 668 有方向**（当前 JSON） |
 | 2 | A 模型开关 `MODEL_REASONING_ENABLED` | 实为 `PAPER_CLAW_MENTOR_WORKFLOW_MODEL_REASONING_ENABLED`，默认 False（确定性） |
 | 3 | `cloud3d/cloud_data.json` 有 `legend`/可用 | ✅ 已重跑 `py build_cloud.py` 重生成（`legend[10]`/`domain_count:10`/`arms:4`，旧备份 `.bak_old`） |
 | 4 | D 导师详情/邮件/推荐是 [STUB] | **均为真实 RAG**（`server/data/ragAdvisors.ts`）；`stub/advisors.ts` 已废弃；✅ PDF summary/keyPoints 也已改为真实内容（`server/routes/pdfText.ts`） |

@@ -114,6 +114,33 @@ def test_current_message_topics_are_not_merged_with_historical_research_topics()
     assert "邮政编码：230026" not in intent.research_topics
 
 
+def test_query_contract_keeps_preferences_out_of_required_topics():
+    request = MentorWorkflowRequest(
+        message="我想找做多智能体强化学习、图神经网络，偏理论且正在招生的导师"
+    )
+    intent, clarification = InputUnderstandingAgent().run(
+        request, new_workflow_state(request, trace_id="trace-preferences")
+    )
+
+    assert clarification is None
+    required = [
+        concept.canonical for concept in intent.query_contract.concepts if concept.required
+    ]
+    assert required == ["multi-agent reinforcement learning", "graph learning"]
+    assert intent.constraints.recruitment_required is True
+    assert intent.constraints.theory_preference == 1.0
+
+
+def test_input_understanding_corrects_unambiguous_search_verb_typo():
+    request = MentorWorkflowRequest(message="找作强化学习的老师")
+    intent, _ = InputUnderstandingAgent().run(
+        request, new_workflow_state(request, trace_id="trace-typo")
+    )
+
+    assert intent.research_topics == ["强化学习"]
+    assert intent.query_contract.canonical_query == "强化学习"
+
+
 def test_input_understanding_requires_candidate_for_compare():
     request = MentorWorkflowRequest(
         message="比较这些导师", goal=MentorGoal.compare_mentors
