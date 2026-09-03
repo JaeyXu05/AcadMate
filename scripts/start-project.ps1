@@ -115,25 +115,33 @@ function Wait-Http([string]$Name, [string]$Url, [int]$TimeoutSeconds) {
 }
 
 function Test-DockerEngine([string]$Docker) {
-    $previous = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = 'Continue'
-        & $Docker info *> $null
-        return $LASTEXITCODE -eq 0
-    } finally { $ErrorActionPreference = $previous }
+    $probeCommand = "`"$Docker`" info 1>nul 2>nul"
+    & $env:ComSpec /d /c $probeCommand
+    $exitCode = $LASTEXITCODE
+    return [bool]($exitCode -eq 0)
 }
 
 function Ensure-DockerEngine([string]$Docker) {
     if (Test-DockerEngine $Docker) { Write-Ok 'Docker engine is running'; return }
-    $desktop = Find-Command 'Docker Desktop.exe' @('%ProgramFiles%\Docker\Docker\Docker Desktop.exe', '%LOCALAPPDATA%\Docker\Docker Desktop.exe')
+    # Portable/custom Docker Desktop installs keep the GUI next to the
+    # resources directory that supplied docker.exe. Include that location so
+    # the launcher starts the same Docker installation it already detected.
+    $dockerInstallRoot = Split-Path (Split-Path (Split-Path $Docker -Parent) -Parent) -Parent
+    $desktop = Find-Command 'Docker Desktop.exe' @(
+        (Join-Path $dockerInstallRoot 'Docker Desktop.exe'),
+        '%ProgramFiles%\Docker\Docker\Docker Desktop.exe',
+        '%LOCALAPPDATA%\Docker\Docker Desktop.exe'
+    )
     if (-not $desktop) { Stop-Startup 'Docker Desktop is installed but its application could not be located.' }
     Write-Step 'Starting Docker Desktop'
     Write-Warn 'Docker Desktop may display its first-run agreement or WSL setup. Complete that window once; the launcher will keep waiting.'
-    Start-Process -FilePath $desktop | Out-Null
+    Start-Process -FilePath $desktop -WorkingDirectory $dockerInstallRoot | Out-Null
     $deadline = (Get-Date).AddMinutes(3)
     do {
         Start-Sleep -Seconds 3
-        if (Test-DockerEngine $Docker) { Write-Ok 'Docker engine is ready'; return }
+        & $env:ComSpec /d /c $probeCommand
+        $engineExitCode = $LASTEXITCODE
+        if ($engineExitCode -eq 0) { Write-Ok 'Docker engine is ready'; return }
     } while ((Get-Date) -lt $deadline)
     Stop-Startup 'Docker did not become ready within 3 minutes. Open Docker Desktop, finish its first-run agreement/WSL setup, then rerun.'
 }
@@ -178,10 +186,18 @@ function Ensure-Dependencies([string]$Npm, [string]$Uv) {
     Write-Step 'Checking D-side Node dependencies'
     Push-Location $CodeRoot
     try {
-        & $Npm ls --depth=0 *> $null
+        # Windows PowerShell can promote npm's diagnostic stderr to a
+        # terminating error. Run npm through cmd.exe so a non-zero npm ls exit
+        # code is handled as the expected "dependencies need repair" case.
+        $npmCheckCommand = "`"$Npm`" ls --depth=0 1>nul 2>nul"
+        & $env:ComSpec /d /c $npmCheckCommand
         if ($LASTEXITCODE -ne 0) {
             Write-Step 'Installing/updating D-side Node dependencies'
-            & $Npm install
+            # better-sqlite3 ships the Windows native binary in the package.
+            # npm otherwise sees binding.gyp and unnecessarily tries to build
+            # it locally, which requires Visual Studio C++ Build Tools.
+            $npmInstallCommand = "`"$Npm`" install --no-audit --no-fund --ignore-scripts"
+            & $env:ComSpec /d /c $npmInstallCommand
             if ($LASTEXITCODE -ne 0) { Stop-Startup 'npm install failed. Check network/proxy settings and available disk space.' }
         }
         Write-Ok 'D-side Node dependencies are complete'
