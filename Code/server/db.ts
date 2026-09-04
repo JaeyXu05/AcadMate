@@ -18,7 +18,7 @@ let db: Database.Database;
 // ============================================================================
 
 /** 当前期望的 schema 版本（每新增一个迁移步骤 +1） */
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 24;
 
 const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS report_preferences (
@@ -60,8 +60,12 @@ const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS plans (
         id                INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id           INTEGER NOT NULL,
+        parent_plan_id    INTEGER,
         title             TEXT    NOT NULL,
         description       TEXT    NOT NULL DEFAULT '',
+        deliverable       TEXT    NOT NULL DEFAULT '',
+        acceptance_criteria TEXT  NOT NULL DEFAULT '[]',
+        sequence          INTEGER,
         status            TEXT    NOT NULL DEFAULT 'todo',
         priority          TEXT    NOT NULL DEFAULT 'medium',
         start_at          TEXT,
@@ -73,7 +77,8 @@ const PRODUCTIVITY_DDL = `
         source            TEXT    NOT NULL DEFAULT 'user',
         created_at        TEXT    DEFAULT (datetime('now','localtime')),
         updated_at        TEXT    DEFAULT (datetime('now','localtime')),
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_plan_id) REFERENCES plans(id) ON DELETE SET NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_plans_user_due
@@ -90,7 +95,6 @@ const PRODUCTIVITY_DDL = `
         scheduled_at TEXT,
         sent_at      TEXT,
         error        TEXT,
-        attachments_json TEXT NOT NULL DEFAULT '[]',
         created_at   TEXT    DEFAULT (datetime('now','localtime')),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
@@ -98,26 +102,24 @@ const PRODUCTIVITY_DDL = `
       CREATE INDEX IF NOT EXISTS idx_email_outbox_status
         ON email_outbox(status, scheduled_at);
 
-      CREATE TABLE IF NOT EXISTS email_accounts (
-        user_id              INTEGER PRIMARY KEY,
-        smtp_host            TEXT NOT NULL DEFAULT '',
-        smtp_port            INTEGER NOT NULL DEFAULT 465,
-        smtp_secure          INTEGER NOT NULL DEFAULT 1,
-        smtp_user            TEXT NOT NULL DEFAULT '',
-        smtp_from            TEXT NOT NULL DEFAULT '',
-        smtp_pass_encrypted  TEXT NOT NULL DEFAULT '',
-        smtp_remember        INTEGER NOT NULL DEFAULT 0,
-        imap_host            TEXT NOT NULL DEFAULT '',
-        imap_port            INTEGER NOT NULL DEFAULT 993,
-        imap_secure          INTEGER NOT NULL DEFAULT 1,
-        imap_user            TEXT NOT NULL DEFAULT '',
-        imap_mailbox         TEXT NOT NULL DEFAULT 'INBOX',
-        imap_pass_encrypted  TEXT NOT NULL DEFAULT '',
-        imap_remember        INTEGER NOT NULL DEFAULT 0,
-        imap_same_as_smtp   INTEGER NOT NULL DEFAULT 0,
-        updated_at           TEXT DEFAULT (datetime('now','localtime')),
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      CREATE TABLE IF NOT EXISTS productivity_run_cache (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id           INTEGER NOT NULL,
+        skill_id          TEXT    NOT NULL,
+        input_fingerprint TEXT    NOT NULL,
+        run_id            TEXT,
+        status            TEXT    NOT NULL DEFAULT 'queued',
+        artifact_json     TEXT    NOT NULL DEFAULT '{}',
+        audit_json        TEXT    NOT NULL DEFAULT '{}',
+        error             TEXT,
+        created_at        TEXT    DEFAULT (datetime('now','localtime')),
+        updated_at        TEXT    DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(user_id, skill_id, input_fingerprint)
       );
+
+      CREATE INDEX IF NOT EXISTS idx_productivity_run_cache_lookup
+        ON productivity_run_cache(user_id, skill_id, status, updated_at DESC);
 `;
 
 const RESEARCH_DDL = `
@@ -287,6 +289,30 @@ const PAPER_SEARCH_DDL = `
         ON paper_search_sessions(user_id, created_at DESC);
 `;
 
+/** 邮箱账号（SMTP/IMAP 设置）建表。历史迁移 17 曾引入，后因报告功能改动被覆盖；保留幂等 DDL 供旧库补建。 */
+const EMAIL_ACCOUNTS_DDL = `
+      CREATE TABLE IF NOT EXISTS email_accounts (
+        user_id              INTEGER PRIMARY KEY,
+        smtp_host            TEXT NOT NULL DEFAULT '',
+        smtp_port            INTEGER NOT NULL DEFAULT 465,
+        smtp_secure          INTEGER NOT NULL DEFAULT 1,
+        smtp_user            TEXT NOT NULL DEFAULT '',
+        smtp_from            TEXT NOT NULL DEFAULT '',
+        smtp_pass_encrypted  TEXT NOT NULL DEFAULT '',
+        smtp_remember        INTEGER NOT NULL DEFAULT 0,
+        imap_host            TEXT NOT NULL DEFAULT '',
+        imap_port            INTEGER NOT NULL DEFAULT 993,
+        imap_secure          INTEGER NOT NULL DEFAULT 1,
+        imap_user            TEXT NOT NULL DEFAULT '',
+        imap_mailbox         TEXT NOT NULL DEFAULT 'INBOX',
+        imap_pass_encrypted  TEXT NOT NULL DEFAULT '',
+        imap_remember        INTEGER NOT NULL DEFAULT 0,
+        updated_at           TEXT DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+`;
+
+/** PDF 后台分析任务表（历史迁移 20 引入，同样保留幂等 DDL）。 */
 const PDF_ANALYSIS_DDL = `
       CREATE TABLE IF NOT EXISTS pdf_analysis_jobs (
         job_id       TEXT PRIMARY KEY,
@@ -669,29 +695,10 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     version: 16,
     sql: PAPER_SEARCH_DDL,
   },
+  // 版本 17-19：邮箱账号与 SMTP/IMAP 设置（feat(email) 迁移，恢复历史编号）。
   {
     version: 17,
-    sql: `
-      CREATE TABLE IF NOT EXISTS email_accounts (
-        user_id              INTEGER PRIMARY KEY,
-        smtp_host            TEXT NOT NULL DEFAULT '',
-        smtp_port            INTEGER NOT NULL DEFAULT 465,
-        smtp_secure          INTEGER NOT NULL DEFAULT 1,
-        smtp_user            TEXT NOT NULL DEFAULT '',
-        smtp_from            TEXT NOT NULL DEFAULT '',
-        smtp_pass_encrypted  TEXT NOT NULL DEFAULT '',
-        smtp_remember        INTEGER NOT NULL DEFAULT 0,
-        imap_host            TEXT NOT NULL DEFAULT '',
-        imap_port            INTEGER NOT NULL DEFAULT 993,
-        imap_secure          INTEGER NOT NULL DEFAULT 1,
-        imap_user            TEXT NOT NULL DEFAULT '',
-        imap_mailbox         TEXT NOT NULL DEFAULT 'INBOX',
-        imap_pass_encrypted  TEXT NOT NULL DEFAULT '',
-        imap_remember        INTEGER NOT NULL DEFAULT 0,
-        updated_at           TEXT DEFAULT (datetime('now','localtime')),
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      );
-    `,
+    sql: EMAIL_ACCOUNTS_DDL,
   },
   {
     version: 18,
@@ -701,13 +708,42 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     version: 19,
     sql: `UPDATE email_accounts SET imap_same_as_smtp = 0 WHERE imap_same_as_smtp = 1;`,
   },
+  // 版本 20：PDF 后台分析任务表。
   {
     version: 20,
     sql: PDF_ANALYSIS_DDL,
   },
+  // 版本 21：发件箱附件列。
   {
     version: 21,
     sql: `ALTER TABLE email_outbox ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]';`,
+  },
+  // 版本 22-24：report/plans/productivity schema。原曾占用 17-19，与 email/PDF
+  // 迁移冲突；现移到新版本号，17-19 恢复为邮箱迁移，保证与 v2.0-clean 对齐。
+  {
+    version: 22,
+    sql: `
+      ALTER TABLE plans ADD COLUMN parent_plan_id INTEGER;
+      ALTER TABLE plans ADD COLUMN deliverable TEXT NOT NULL DEFAULT '';
+      ALTER TABLE plans ADD COLUMN acceptance_criteria TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE plans ADD COLUMN sequence INTEGER;
+    `,
+  },
+  { version: 23, sql: `
+    CREATE TABLE IF NOT EXISTS productivity_run_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, skill_id TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL, run_id TEXT, status TEXT NOT NULL DEFAULT 'queued',
+      artifact_json TEXT NOT NULL DEFAULT '{}', audit_json TEXT NOT NULL DEFAULT '{}', error TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, skill_id, input_fingerprint)
+    );
+    CREATE INDEX IF NOT EXISTS idx_productivity_run_cache_lookup
+      ON productivity_run_cache(user_id, skill_id, status, updated_at DESC);
+  ` },
+  {
+    version: 24,
+    sql: `ALTER TABLE plans ADD COLUMN execution_notes TEXT NOT NULL DEFAULT '';`,
   },
 ];
 
@@ -753,15 +789,26 @@ function ensureColumn(database: Database.Database, table: string, column: string
   database.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
 
-/** 计划/报告/发件箱表不存在时补建，不依赖 user_version 是否已到 8/9。 */
+/** 计划/报告/发件箱/邮箱账号/PDF 任务表不存在时补建，不依赖 user_version 是否已到对应版本。 */
 export function ensureProductivitySchema(database: Database.Database): void {
   database.exec(PRODUCTIVITY_DDL);
+  // codex/v2-profile-research-output 分支的用户研究画像字段（与 v2.0-clean 对齐）。
   ensureColumn(database, 'users', 'research_profile_json', "research_profile_json TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(database, 'users', 'research_profile_updated_at', 'research_profile_updated_at TEXT');
+  // 旧库可能已把 user_version 推到 19+ 但当时 17-21 是 report/plans 内容，
+  // 邮箱/PDF 表从未建出：这里幂等补建，保证邮件与 PDF 分析功能可用。
+  database.exec(EMAIL_ACCOUNTS_DDL);
+  ensureColumn(database, 'email_accounts', 'imap_same_as_smtp', 'imap_same_as_smtp INTEGER NOT NULL DEFAULT 0');
+  database.exec(PDF_ANALYSIS_DDL);
+  ensureColumn(database, 'email_outbox', 'attachments_json', "attachments_json TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, 'plans', 'completed_at', 'completed_at TEXT');
+  ensureColumn(database, 'plans', 'parent_plan_id', 'parent_plan_id INTEGER');
+  ensureColumn(database, 'plans', 'deliverable', "deliverable TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'plans', 'acceptance_criteria', "acceptance_criteria TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(database, 'plans', 'sequence', 'sequence INTEGER');
+  ensureColumn(database, 'plans', 'execution_notes', "execution_notes TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'email_outbox', 'attempt_count', 'attempt_count INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'email_outbox', 'last_attempt_at', 'last_attempt_at TEXT');
-  ensureColumn(database, 'email_outbox', 'attachments_json', "attachments_json TEXT NOT NULL DEFAULT '[]'");
   ensureColumn(database, 'progress_reports', 'generation_json', "generation_json TEXT NOT NULL DEFAULT '{}'");
   if (tableExists(database, 'plans')) {
     database.exec(`CREATE INDEX IF NOT EXISTS idx_plans_user_completed ON plans(user_id, completed_at)`);
@@ -771,7 +818,6 @@ export function ensureProductivitySchema(database: Database.Database): void {
   database.exec(SKILL_DDL);
   database.exec(INTEGRATIONS_DDL);
   database.exec(PAPER_SEARCH_DDL);
-  database.exec(PDF_ANALYSIS_DDL);
 }
 
 export function getDb(): Database.Database {

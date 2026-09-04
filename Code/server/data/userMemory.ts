@@ -7,6 +7,7 @@ import { isGenericParentTerm, longTermInterestTerms, sessionInterestTerms } from
 export interface RecommendMemory {
   longTerm: string[];
   recent: string[];
+  favorite: string[];
   core: string[];
 }
 
@@ -57,19 +58,20 @@ function recentSearchQueries(userId: number, limit = 2): string[] {
   return queries;
 }
 
-/** 猜你喜欢主信号：长期核心方向 + 最近 1–2 次检索，不是全历史并集。 */
+/** 猜你喜欢主信号：长期 4 + 近期 2 + 收藏推导 2；近期信号不再被长期画像挤掉。 */
 export function loadRecommendMemory(userId: number): RecommendMemory {
   const profile = loadUserProfile(userId);
   const growth = loadGrowthState(userId);
   const interests = Array.isArray(profile.interests) ? profile.interests.map(String) : [];
   const longTerm = uniqueCap(
-    longTermInterestTerms([...growth.directions, ...interests, ...favoriteDirectionHints(userId)]),
-    8,
+    longTermInterestTerms([...growth.directions, ...interests]),
+    4,
   );
   const recent = uniqueCap(sessionInterestTerms(recentSearchQueries(userId, 2)), 2);
   // 近期检索表达当前任务目标，优先参与“猜你喜欢”信号；长期兴趣仍提供广度。
-  const core = uniqueCap([...recent, ...longTerm], 8);
-  return { longTerm, recent, core };
+  const favorite = uniqueCap(longTermInterestTerms(favoriteDirectionHints(userId)), 2);
+  const core = uniqueCap([...recent, ...longTerm, ...favorite], 8);
+  return { longTerm, recent, favorite, core };
 }
 
 export function studentIdentity(userId: number): {

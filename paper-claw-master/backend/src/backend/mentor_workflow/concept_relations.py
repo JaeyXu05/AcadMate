@@ -20,6 +20,7 @@ from backend.mentor_workflow.schemas import (
     QueryConcept,
     QueryConceptRole,
 )
+from backend.mentor_workflow.retrieval_policy import retrieval_policy
 
 
 class Relation:
@@ -54,7 +55,7 @@ class ConceptFamily:
 # product.  New domains are not required to be added here: the generic judge
 # still handles phrase containment and shared anchors without changing the raw
 # query.
-CONCEPT_FAMILIES: tuple[ConceptFamily, ...] = (
+_LEGACY_CONCEPT_FAMILIES: tuple[ConceptFamily, ...] = (
     ConceptFamily(
         "generative_ai",
         (
@@ -287,6 +288,36 @@ CONCEPT_FAMILIES: tuple[ConceptFamily, ...] = (
 )
 
 
+def _families_from_policy() -> tuple[ConceptFamily, ...]:
+    """Load the shared registry and retain legacy families absent from policy."""
+    try:
+        rows = retrieval_policy().get("concept_families", [])
+        families = tuple(
+            ConceptFamily(
+                concept_id=str(row["id"]),
+                aliases=tuple(str(value) for value in row.get("aliases", [])),
+                children=tuple(str(value) for value in row.get("children", [])),
+                parents=tuple(str(value) for value in row.get("parents", [])),
+                canonical=str(row["canonical"]) if row.get("canonical") else None,
+            )
+            for row in rows
+            if row.get("id") and row.get("aliases")
+        )
+        if not families:
+            return _LEGACY_CONCEPT_FAMILIES
+        policy_ids = {family.concept_id for family in families}
+        return families + tuple(
+            family
+            for family in _LEGACY_CONCEPT_FAMILIES
+            if family.concept_id not in policy_ids
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return _LEGACY_CONCEPT_FAMILIES
+
+
+CONCEPT_FAMILIES = _families_from_policy()
+
+
 GENERIC_PARENTS = {
     normalize
     for normalize in (
@@ -319,6 +350,9 @@ _TAIL_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _SPLIT_RE = re.compile(r"\s*(?:和|与|以及|及|、|,|，|;|；|\+|/|或)\s*")
+_EXPLICIT_OR_RE = re.compile(r"(?:\b(?:or)\b|或者|或)", flags=re.IGNORECASE)
+_METHOD_PREFIX_RE = re.compile(r"^(?:用|使用|采用|基于|通过)\s*", flags=re.IGNORECASE)
+_APPLICATION_PREFIX_RE = re.compile(r"^(?:用于|应用于|面向|解决)\s*", flags=re.IGNORECASE)
 _STOP_CONCEPT_RE = re.compile(
     r"^(?:方向|研究方向|相关方向|导师|老师|教授|博导|领域|方面)$"
 )
@@ -326,10 +360,6 @@ _CONSTRAINT_SURFACE_RE = re.compile(
     r"(?:招生|招收|在招|名额|偏理论|理论导向|本科生|愿意带|学院|院系|实验室)",
     flags=re.IGNORECASE,
 )
-_METHOD_PREFIX_RE = re.compile(r"^(?:用|使用|基于|通过|采用)")
-_APPLICATION_PREFIX_RE = re.compile(r"^(?:用于|面向|解决|应用于)")
-
-
 def clean_query_text(value: str) -> str:
     text = " ".join(str(value or "").split()).strip("。.!！?？,，;；")
     text = re.sub(r"^我(?:想|希望)(?:要)?", "", text)
@@ -406,6 +436,13 @@ def extract_query_concepts(
             )
         )
     return concepts
+
+
+def query_logic(raw_query: str, concepts: Iterable[QueryConcept]) -> str:
+    """Preserve an explicit OR; otherwise multiple required concepts mean AND."""
+    if _EXPLICIT_OR_RE.search(clean_query_text(raw_query)):
+        return "OR"
+    return "AND" if len([item for item in concepts if item.required]) > 1 else "OR"
 
 
 def canonical_for(value: str) -> str:

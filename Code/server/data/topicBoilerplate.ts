@@ -24,8 +24,8 @@ const WEB_NAV_TOKENS = new Set([
 ]);
 
 const RECRUIT_HINT = /招生|招聘|招收|欢迎[\s\S]{0,6}加入|个人陈述|简历|题目注明|发送至|满足其一|联合培养|博士后申请|青年才俊|团队协作精神|有意者请|成绩单发至/;
-const INTRO_HINT = /(我|目前|近年|迄今|以第一|通讯作者|作者身份|从事|主要研究|致力于|专注|当前|I\b|My |been|focus|current)/;
 const PAPER_LINE_HINT = /DOI:|Distinguished Paper|Wiley|IEEE Transactions|JSSC|Nature Physics|Nature Nanotechnol|Adv\. Mater|J Am Chem Soc|Journal of the American Chemical Society|Light: Science|Geophysical Research Letters|Geochimica et Cosmochimica Acta|Applied Catalysis B/;
+const BIOGRAPHY_HINT = /^(?:截至目前|近些年|近年来|迄今|以第一|通讯作者|作者身份|an? adjunct|University of|a brief introduction)/i;
 const TITLE_LABEL = /^(博士生导师|硕士生导师|特任副研究员|博士后 \/ 副研究员|🧑‍🔬 博士后 \/ 副研究员|Special Associate Researcher)$/;
 
 /** 去除网页抓取文本里常见的 "1、"/"1)"/"[1]" 等列表序号前缀。 */
@@ -52,10 +52,11 @@ export function isDirtyTopic(topic: string, mentorName?: string): boolean {
   if (/访问量|点击量|点击数|访问统计/.test(s)) return true;
   if (WEB_NAV_TOKENS.has(s)) return true;
   if (RECRUIT_HINT.test(s)) return true;
+  if (BIOGRAPHY_HINT.test(s)) return true;
+  if (/^[“"].+[”"]$/.test(s)) return true;
   if (/@[a-zA-Z0-9._-]+\.(edu|com|org|cn)/.test(s)) return true;
   if (/https?:\/\//.test(s)) return true;
   if (/电子邮箱：|邮箱：/.test(s)) return true;
-  if (/[。]/.test(s) && INTRO_HINT.test(s)) return true;
   if (TITLE_LABEL.test(s)) return true;
   if (/^指导研究生/.test(s)) return true;
   if (PAPER_LINE_HINT.test(s)) return true;
@@ -64,8 +65,24 @@ export function isDirtyTopic(topic: string, mentorName?: string): boolean {
   if (/^[\d\-\/\.\s:：、]+$/.test(s)) return true;
   if (/^第[一二三四五六七八九十\d]+季度/.test(s)) return true;
   if (/Distinguished Paper|实习|奖学金|Best Paper|优秀青年|杰出青年|人才计划/.test(s)) return true;
-  if (s.length > 40) return true;
   return false;
+}
+
+/**
+ * 官网有时把多个研究方向抓成一整句。先按明确的句/分号边界拆开，再逐段判噪声，
+ * 避免“凝聚态物理。专注于……”或较长英文方向被整条丢弃。
+ */
+function topicFragments(value: string): string[] {
+  const pieces = value
+    .split(/[。；;]+/)
+    .map((item) => item
+      .replace(/^[，,、\s]+|[，,、\s]+$/g, '')
+      .replace(/^(?:主要)?研究方向包括\s*/i, '')
+      .replace(/^(?:专注于|致力于)\s*/i, '')
+      .replace(/^My current research interests? (?:mainly )?focus(?:es)? on\s*/i, '')
+      .trim())
+    .filter(Boolean);
+  return pieces.length ? pieces : [value];
 }
 
 export function cleanTopics(values: unknown, mentorName?: string): string[] {
@@ -74,12 +91,15 @@ export function cleanTopics(values: unknown, mentorName?: string): string[] {
   const cleaned: string[] = [];
   for (const raw of values) {
     const text = String(raw || '').replace(/\s+/g, ' ').trim();
+    if (!text) continue;
     const cleanedText = stripEnumeratedPrefix(text);
-    if (!cleanedText || isBoilerplateTopic(cleanedText) || isDirtyTopic(cleanedText, mentorName)) continue;
-    const key = cleanedText.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    cleaned.push(cleanedText);
+    for (const fragment of topicFragments(cleanedText || text)) {
+      if (isBoilerplateTopic(fragment) || isDirtyTopic(fragment, mentorName)) continue;
+      const key = fragment.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      cleaned.push(fragment);
+    }
   }
   return cleaned;
 }

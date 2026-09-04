@@ -110,6 +110,30 @@ def test_current_message_topics_are_not_merged_with_historical_research_topics()
 
     assert intent.research_topics == ["推荐系统"]
     assert clarification is None
+
+
+def test_intake_separates_department_recruitment_and_topic_constraints():
+    request = MentorWorkflowRequest(message="找网络空间安全学院做大模型、愿意招本科生的老师")
+    intent, clarification = InputUnderstandingAgent().run(
+        request, new_workflow_state(request, trace_id="trace-structured-query")
+    )
+    assert "网络空间安全学院" in intent.constraints.departments
+    assert intent.constraints.undergraduate_friendly is True
+    assert intent.constraints.recruitment_required is True
+    assert "大模型" in intent.query_contract.canonical_query
+    assert "本科生" not in intent.query_contract.canonical_query
+    assert clarification is None
+
+
+def test_intake_recognizes_explicit_mentor_name_without_treating_it_as_topic():
+    request = MentorWorkflowRequest(message="找张凯老师")
+    intent, clarification = InputUnderstandingAgent().run(
+        request, new_workflow_state(request, trace_id="trace-name-query")
+    )
+    assert intent.constraints.mentor_names == ["张凯"]
+    assert intent.research_topics == []
+    assert intent.query_contract.concepts == []
+    assert clarification is None
     assert "几何拓扑" not in intent.research_topics
     assert "邮政编码：230026" not in intent.research_topics
 

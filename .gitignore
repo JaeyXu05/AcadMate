@@ -2,7 +2,6 @@
 .DS_Store
 Thumbs.db
 *.log
-.startup-logs/
 
 # ===== 依赖 / 构建产物 =====
 node_modules/
@@ -43,3 +42,4 @@ Code/generated/
 cloud3d/*.bak*
 paper-claw-master/eval/results/
 *.tsbuildinfo
+.startup-logs/

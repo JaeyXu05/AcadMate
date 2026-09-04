@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ssl
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from openai import OpenAI
@@ -26,7 +28,7 @@ class OpenAICompatibleChatModelAdapter:
             # reachable directly, so do not let process-global proxy variables
             # silently turn a valid API key into an SSL/connection failure.
             if self._http_client is None:
-                self._http_client = httpx.Client(trust_env=False)
+                self._http_client = _http_client_for_base_url(provider.base_url)
             api_key = provider.api_key or resolve_api_key(provider.api_key_ref)
             try:
                 configured_retries = provider.settings.get("max_retries")
@@ -69,3 +71,18 @@ class OpenAICompatibleChatModelAdapter:
             if not text.strip():
                 text = str(getattr(message, "reasoning_content", "") or "")
         return text
+
+
+def _http_client_for_base_url(base_url: str | None) -> httpx.Client:
+    """Use TLS 1.2 for the USTC gateway, matching the agent runtime client.
+
+    That gateway can stall on the OpenSSL TLS 1.3 profile used by the default
+    client.  Productivity skills previously used a different client path, so
+    plans/reports appeared to randomly time out while other agent calls worked.
+    """
+    if urlparse(base_url or "").hostname == "api.llm.ustc.edu.cn":
+        tls_context = ssl.create_default_context()
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.maximum_version = ssl.TLSVersion.TLSv1_2
+        return httpx.Client(verify=tls_context, trust_env=False)
+    return httpx.Client(trust_env=False)

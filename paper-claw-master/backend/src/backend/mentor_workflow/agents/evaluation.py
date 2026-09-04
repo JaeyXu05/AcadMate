@@ -59,10 +59,14 @@ class MatchingAgent:
             )
             if not qualifies(topic_match, match_type):
                 continue
-            inferred_topic = int(candidate.source_metadata.get("topics_source") or 0) != 1
+            inferred_topic = int(candidate.source_metadata.get("topics_source") or 0) not in {1, 3}
+            methods_verified = candidate.source_metadata.get("methods_verified") is True
             dimensions = MatchDimensionScores(
                 research_topic_match=topic_match,
-                method_match=_overlap_score(intent.methods, candidate.methods),
+                method_match=(
+                    _overlap_score(intent.methods, candidate.methods)
+                    if methods_verified else 0.0
+                ),
                 application_match=_overlap_score(
                     intent.application_domains,
                     [*candidate.research_topics, *candidate.methods],
@@ -100,6 +104,13 @@ class MatchingAgent:
                     "Recruitment status is not verified and must not be assumed."
                 )
             rank_score, rank_breakdown = self.rank_score(intent, candidate, dimensions)
+            score_breakdown = {
+                **score_breakdown,
+                **rank_breakdown,
+                "eligibility_score": topic_match,
+                "ranking_score": rank_score,
+                "displayed_topic_score": score_breakdown.get("displayed_topic_score", topic_match),
+            }
             provisional.append(
                 MatchResult(
                     candidate_id=candidate.candidate_id,
@@ -128,7 +139,11 @@ class MatchingAgent:
             )
         ranked = sorted(
             provisional,
-            key=lambda item: (-(item.rank_score or item.total_score), -item.total_score, item.candidate_id),
+            key=lambda item: (
+                -(item.rank_score or item.score_breakdown.get("ranking_score", item.total_score)),
+                -item.total_score,
+                item.candidate_id,
+            ),
         )
         return [
             item.model_copy(update={"ranking_position": index})
@@ -166,7 +181,11 @@ class MatchingAgent:
             "method",
             0.15,
             dimensions.method_match,
-            bool(intent.methods and candidate.methods),
+            bool(
+                intent.methods
+                and candidate.methods
+                and candidate.source_metadata.get("methods_verified") is True
+            ),
         )
         apply(
             "application",

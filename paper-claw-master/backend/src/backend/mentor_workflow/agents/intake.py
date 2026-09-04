@@ -81,6 +81,15 @@ class InputUnderstandingAgent:
                 ],
             ]
         )
+        detected = _constraints_from_message(request.message)
+        constraints.departments = _unique([*constraints.departments, *detected["departments"]])
+        constraints.mentor_names = _unique([*constraints.mentor_names, *detected["mentor_names"]])
+        if constraints.undergraduate_friendly is None and detected["undergraduate_friendly"]:
+            constraints.undergraduate_friendly = True
+        if constraints.recruitment_required is None and detected["recruitment_required"]:
+            constraints.recruitment_required = True
+        if request.goal is None and constraints.mentor_names and not message_topics:
+            goal = MentorGoal.inspect_mentor
         sources = [InputSource.text]
         if request.research_topics:
             sources.append(InputSource.keyword)
@@ -126,6 +135,7 @@ class InputUnderstandingAgent:
                 _unique([*topics, *request.research_topics]),
                 methods,
                 applications,
+                semantic_query=_semantic_query(request.message, detected),
             ),
         )
         clarification = None
@@ -242,16 +252,54 @@ _QUERY_PREFIX = re.compile(
     re.IGNORECASE,
 )
 _QUERY_SUFFIX = re.compile(r"(?:的)?(?:导师|老师|教授|博导)s?$", re.IGNORECASE)
+_MENTOR_NAME_RE = re.compile(
+    r"(?:找|查|查看|介绍)\s*([\u4e00-\u9fff]{2,3})(?:老师|教授|导师|博导)"
+)
+_DEPARTMENT_RE = re.compile(
+    r"([\u4e00-\u9fffA-Za-z0-9·\-]{2,30}(?:学院|系(?!统)|研究院|实验室))"
+)
+
+
+def _constraints_from_message(message: str) -> dict[str, object]:
+    mentor_names = [match.group(1) for match in _MENTOR_NAME_RE.finditer(message)]
+    departments = [
+        re.sub(r"^(?:找|在|来自)", "", match.group(1))
+        for match in _DEPARTMENT_RE.finditer(message)
+    ]
+    return {
+        "mentor_names": _unique(mentor_names),
+        "departments": _unique(departments),
+        "undergraduate_friendly": bool(re.search(r"(?:愿意|可以|能|招|带).{0,8}本科生", message)),
+        "recruitment_required": bool(re.search(r"(?:愿意|正在|可以|能)?(?:招收|招生|招|带).{0,8}(?:本科生|硕士|博士|研究生)", message)),
+    }
+
+
+def _semantic_query(message: str, detected: dict[str, object]) -> str:
+    """Remove person/department/recruitment/background clauses before concept parsing."""
+    text = " ".join(str(message or "").split()).strip()
+    for department in detected.get("departments", []):
+        text = text.replace(str(department), " ")
+    for name in detected.get("mentor_names", []):
+        text = re.sub(rf"(?:找|查|查看|介绍)\s*{re.escape(str(name))}(?:老师|教授|导师|博导)", " ", text)
+    text = re.sub(r"(?:愿意|正在|可以|能)?(?:招收|招生|招|带).{0,10}(?:本科生|硕士|博士|研究生)", " ", text)
+    text = re.sub(r"^(?:我会|我熟悉|我掌握|掌握|熟悉|会用)[^，,。；;]{1,100}[，,。；;]\s*", "", text)
+    text = re.sub(r"^(?:想做|想研究|希望做|希望研究)\s*", "", text)
+    text = re.sub(r"\s+", " ", text).strip(" ，,。；;的")
+    return text
 
 
 def _topics_from_text(message: str) -> list[str]:
     """A search-box query is itself a topic. Clarification only if there is no subject."""
     if _is_boilerplate_query(message):
         return []
-    extracted = _topics_from_patterns(message)
+    detected = _constraints_from_message(message)
+    semantic = _semantic_query(message, detected)
+    if not semantic:
+        return []
+    extracted = _topics_from_patterns(semantic)
     if extracted:
         return extracted
-    leftover = _bare_query_topic(message)
+    leftover = _bare_query_topic(semantic)
     return [leftover] if leftover else []
 
 
@@ -347,7 +395,7 @@ def _missing_fields(
     state: WorkflowState,
 ) -> list[str]:
     missing: list[str] = []
-    if goal == MentorGoal.find_mentors and not topics:
+    if goal == MentorGoal.find_mentors and not topics and not mentor_names and not candidate_ids:
         missing.append("research_topics")
     if (
         goal in {MentorGoal.inspect_mentor, MentorGoal.compare_mentors}

@@ -294,6 +294,20 @@ class FileInternalMentorRag:
                 continue
             if candidate_filter and candidate.candidate_id not in candidate_filter:
                 continue
+            requested_departments = [
+                _normalize(value) for value in intent.constraints.departments
+            ]
+            department = _normalize(candidate.department or "")
+            if requested_departments and not any(
+                requested in department or department in requested
+                for requested in requested_departments
+            ):
+                continue
+            recruitment = candidate.recruitment_status or ""
+            if intent.constraints.recruitment_required and not recruitment:
+                continue
+            if intent.constraints.undergraduate_friendly and "本科" not in recruitment:
+                continue
             if not concepts and not mentor_filter and not candidate_filter:
                 warnings.append("无检索条件，内部语料不召回全库")
                 continue

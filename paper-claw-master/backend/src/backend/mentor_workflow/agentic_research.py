@@ -946,9 +946,16 @@ class ModelDrivenMatchingAgent:
             revised.append(
                 result.model_copy(
                     update={
-                        "total_score": dimensions.mean_score(),
+                        # Model assessment may refine ordering, but it must not
+                        # rewrite the deterministic eligibility/display score.
+                        "total_score": result.total_score,
                         "rank_score": rank_score,
                         "dimension_scores": dimensions,
+                        "score_breakdown": {
+                            **result.score_breakdown,
+                            "eligibility_score": result.total_score,
+                            "ranking_score": rank_score,
+                        },
                         "rationale": _unique(
                             [
                                 assessment.direction_summary,

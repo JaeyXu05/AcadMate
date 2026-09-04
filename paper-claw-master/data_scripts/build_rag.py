@@ -75,10 +75,30 @@ def _author_key(value: str) -> str:
     return re.sub(r"[^a-z0-9一-鿿]", "", value.casefold())
 
 
-def _paper_methods(title: str) -> list[str]:
-    """从论文标题命中常见方法关键词；保守做法，不做推断。"""
-    text = (title or "").casefold()
-    return [m for m in _METHOD_KEYWORDS if m in text]
+def _keyword_in_title(keyword: str, title: str) -> bool:
+    """Match ASCII keywords on word boundaries while keeping CJK matching simple."""
+    folded = (title or "").casefold()
+    term = keyword.casefold().strip()
+    if not term:
+        return False
+    if re.search(r"[a-z0-9]", term):
+        pattern = re.escape(term).replace(r"\ ", r"[\s\-]+")
+        if term in {"electrochemi", "cryptograph", "metallurg"}:
+            return re.search(rf"(?<![a-z0-9]){pattern}[a-z]*(?![a-z0-9])", folded) is not None
+        return re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", folded) is not None
+    return term in folded
+
+
+def _paper_methods(titles: str | list[str]) -> list[str]:
+    """从论文标题保守抽取方法；列表输入要求至少两篇论文支持。"""
+    values = [titles] if isinstance(titles, str) else [str(item or "") for item in titles]
+    if isinstance(titles, str):
+        return [method for method in _METHOD_KEYWORDS if _keyword_in_title(method, values[0])]
+    return [
+        method
+        for method in _METHOD_KEYWORDS
+        if sum(_keyword_in_title(method, title) for title in values) >= 2
+    ]
 
 
 # 论文标题 → 研究方向标签 的保守词典（中英双语子串命中）。
@@ -188,13 +208,19 @@ def _paper_topics_from_titles(titles: list[str]) -> list[str]:
     只在 titles 非空时调用，且调用方仅在该导师 research_topics 为空时才回填，
     因此它绝不会覆盖官网已抓到的研究方向。
     """
-    blob = " ".join(titles).casefold()
     hit: list[str] = []
     seen: set[str] = set()
+    one_paper_ok = {
+        "reinforcement learning", "computer vision", "natural language processing",
+        "large language model", "graph neural", "diffusion model", "bioinformatics",
+        "knowledge graph", "recommender", "federated learning", "signal processing",
+        "cloud computing", "high performance computing", "computer architecture",
+        "signal integrity", "soc",
+    }
     for keyword, label in _PAPER_TOPIC_LEXICON:
-        if keyword in _AMBIGUOUS_PAPER_TOPIC_KEYWORDS:
-            continue
-        if keyword in blob and label not in seen:
+        support = sum(_keyword_in_title(keyword, title) for title in titles)
+        minimum = 1 if keyword in one_paper_ok else 2
+        if support >= minimum and label not in seen:
             seen.add(label)
             hit.append(label)
     return hit[:6]
@@ -603,6 +629,42 @@ def _source_match_flag(record: dict) -> bool | None:
     if record.get("dblp_pid") is not None:
         return record.get("dblp_exact_match")
     return None
+
+
+_PLATFORM_OVERRIDE_KEYS = {
+    "openalex": "OpenAlex",
+    "s2": "Semantic Scholar",
+    "dblp": "DBLP",
+}
+_PLATFORM_AUTHOR_ID_KEYS = {
+    "openalex": "openalex_author_id",
+    "s2": "s2_author_id",
+    "dblp": "dblp_pid",
+}
+
+
+def _normalized_author_id(value: object) -> str:
+    return str(value or "").strip().casefold().removeprefix("https://openalex.org/")
+
+
+def _paper_identity_status(
+    faculty_id: str,
+    source: dict,
+    manual_overrides: dict[str, dict[str, object]],
+) -> tuple[str, str]:
+    """Return verified/pending/rejected; exact name equality is not verification."""
+    platform = _source_platform(source)
+    override_key = _PLATFORM_OVERRIDE_KEYS.get(platform, platform)
+    mentor_overrides = manual_overrides.get(str(faculty_id), {})
+    if override_key not in mentor_overrides:
+        return "pending", "no_manual_or_strong_identity_verification"
+    approved = mentor_overrides.get(override_key)
+    if approved is None:
+        return "rejected", "manual_override_rejected"
+    actual = source.get(_PLATFORM_AUTHOR_ID_KEYS.get(platform, ""))
+    if _normalized_author_id(approved) == _normalized_author_id(actual):
+        return "verified", "manual_override_author_id"
+    return "rejected", "manual_override_points_to_different_author"
 
 
 def _source_papers(record: dict) -> list[dict]:

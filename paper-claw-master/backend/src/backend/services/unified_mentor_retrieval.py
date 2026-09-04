@@ -185,6 +185,35 @@ class UnifiedMentorRetrieval:
     ) -> MentorResearchResult:
         """Apply the same absolute relevance gate to every retriever path."""
         contract = intent.query_contract
+        if (
+            not contract.canonical_query
+            and (intent.constraints.mentor_names or intent.constraints.candidate_ids)
+        ):
+            kept_ids = {candidate.candidate_id for candidate in result.candidates[:5]}
+            verified = [
+                record.model_copy(
+                    deep=True,
+                    update={
+                        "entity_verified": True,
+                        "source_level": _source_level(record),
+                        "support_type": "IDENTITY",
+                    },
+                )
+                for record in result.evidence
+                if record.candidate_id in kept_ids
+                and record.metadata.get("identity_verified") is True
+            ]
+            allowed = {record.evidence_id for record in verified}
+            kept = [
+                candidate.model_copy(
+                    deep=True,
+                    update={
+                        "evidence_refs": [ref for ref in candidate.evidence_refs if ref in allowed]
+                    },
+                )
+                for candidate in result.candidates[:5]
+            ]
+            return result.model_copy(update={"candidates": kept, "evidence": verified})
         if not contract.canonical_query:
             contract = build_query_contract(
                 intent.raw_message,
@@ -203,6 +232,7 @@ class UnifiedMentorRetrieval:
             ]
             official_topic_support = any(
                 record.metadata.get("identity_verified") is True
+                and record.metadata.get("topics_backfilled") is not True
                 and "research_topics" in str(record.metadata.get("supports_fields", ""))
                 for record in bound_records
             )

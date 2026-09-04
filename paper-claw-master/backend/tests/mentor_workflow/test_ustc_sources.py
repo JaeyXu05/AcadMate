@@ -150,6 +150,7 @@ def _verified_internal_result() -> MentorResearchResult:
                 affiliation="中国科学技术大学",
                 department="计算机科学与技术学院",
                 research_topics=["multi-agent reinforcement learning"],
+                source_metadata={"topics_source": 1},
                 homepage="https://faculty.ustc.edu.cn/zhanghui/zh_CN/index.htm",
                 evidence_refs=[evidence.evidence_id],
             )

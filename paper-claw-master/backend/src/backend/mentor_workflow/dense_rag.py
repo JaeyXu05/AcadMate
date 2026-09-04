@@ -28,8 +28,11 @@ class DenseInternalMentorRag:
             candidates = [
                 item
                 for item in self.index.candidates
-                if item.candidate_id in candidate_ids
-                or item.mentor_name.casefold().strip() in mentor_names
+                if (
+                    item.candidate_id in candidate_ids
+                    or item.mentor_name.casefold().strip() in mentor_names
+                )
+                and _matches_constraints(item, intent)
             ][: self.top_k]
         else:
             contract = intent.query_contract
@@ -57,6 +60,7 @@ class DenseInternalMentorRag:
                 hit
                 for hit in hits
                 if hit.candidate.research_topics and hit.candidate.evidence_refs
+                and _matches_constraints(hit.candidate, intent)
             ][: self.top_k]
             candidates = [
                 hit.candidate.model_copy(
@@ -81,3 +85,19 @@ class DenseInternalMentorRag:
             source_chain=["internal_ustc_dense_rag"],
             unresolved_candidate_ids=[],
         )
+
+
+def _matches_constraints(candidate, intent: IntentPacket) -> bool:
+    requested_departments = [value.casefold().strip() for value in intent.constraints.departments]
+    department = (candidate.department or "").casefold()
+    if requested_departments and not any(
+        requested in department or department in requested
+        for requested in requested_departments
+    ):
+        return False
+    recruitment = candidate.recruitment_status or ""
+    if intent.constraints.recruitment_required and not recruitment:
+        return False
+    if intent.constraints.undergraduate_friendly and "本科" not in recruitment:
+        return False
+    return True

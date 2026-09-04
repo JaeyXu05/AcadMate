@@ -68,14 +68,14 @@ code/
 
 > 以下每个部分的详细步骤见其自身文档（括号内标注）。这里只给速览。
 
-Windows 用户首次使用先双击 `检查启动环境.bat`，它会跨安装路径检查并准备 Node.js、uv、Docker、依赖、数据库和迁移；日常再双击轻量的 `启动项目.bat`，浏览器会立即显示启动页并在服务就绪后自动进入平台。详细说明见 [`一键启动说明.md`](./一键启动说明.md)。
+Windows 用户首次使用先双击 `检查启动环境.bat`；日常再双击 `启动项目.bat`。启动器从自身目录推导路径，不依赖固定用户名或盘符，并且只有在 A、D、前端和星图业务检查均通过后才打开浏览器。详细的端口、多副本及发布检查见 [`一键启动说明.md`](./一键启动说明.md)。
 
 ### 3.1 网站前端（D）—— `Code/`
 
-- 环境：Node.js ≥ 18，npm。
+- 环境：Node.js `20.19+` 或 `22.12+`，npm。
 - 配置：`cd Code && cp .env.example .env`（填 `JWT_SECRET`，后端端口默认 3001）。
 - 依赖：`cd Code && npm install`。
-- 启动：`npm run dev` → 前端 `http://localhost:5173`、后端 `http://localhost:3001`。
+- 启动：`npm run dev` → 前端 `http://127.0.0.1:5173`、后端 `http://127.0.0.1:3001`（可在 `.env` 用 `PORT`、`VITE_PORT` 配置）。
 - 登录账号：任意邮箱 + 密码（≥6 位）即注册即登录。
 - **当前状态**：云图使用独立历史快照（`GET /api/cloud/graph`，715 导师）；检索已通过 D 代理接入 A 的真实后端（`MENTOR_AGENT_BASE_URL` 指向 :8000，未配置或 A 不可达时**不再回退 stub 导师**，直接报错）。检索、详情、邮件和推荐使用当前 972/1969 RAG；PDF 分析已用 `unpdf` 抽取正文生成 summary/keyPoints + 内容匹配推荐（非 stub）。
 
@@ -84,7 +84,7 @@ Windows 用户首次使用先双击 `检查启动环境.bat`，它会跨安装�
 **备用命令与常见问题**：
 - 分别启动：`npm run dev:frontend`（仅前端）/ `npm run dev:backend`（仅后端）；`tsx` 非自动 watch，改后端需重启。
 - 生产构建：`npm run build`（tsc 检查 + Vite 打包到 `dist/`）→ `npm run preview`。
-- 端口被占（EADDRINUSE :3001/:5173）：关掉占用进程，或用 `.env` 改 `PORT`。
+- 端口被占（EADDRINUSE）：关掉占用进程，或在 `.env` 同时调整 `PORT` 和（如需要）`VITE_PORT`；详见一键启动说明。
 - 重置数据库：删 `Code/data.db`（含 `-wal`/`-shm`），重启后端自动重建空库。
 - 打包交给队友时排除：`Code/node_modules/`、`Code/data.db*`、`Code/.env`（`.env.example` 保留）。
 

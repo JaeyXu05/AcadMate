@@ -392,7 +392,7 @@ def _split_topics(value: str) -> list[str]:
     return result
 
 
-def _research_topics(text: str) -> list[str]:
+def _research_topics_all(text: str) -> list[str]:
     values: list[str] = []
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     stop_markers = (
@@ -439,7 +439,19 @@ def _research_topics(text: str) -> list[str]:
         if key and key not in seen:
             seen.add(key)
             unique.append(value)
-    return unique[:20]
+    # Cleaning and de-duplication happen before the safety cap.  This prevents
+    # navigation/citation fragments from occupying all 20 retained slots.
+    cleaned = [
+        value for value in unique
+        if not re.search(r"(?:https?://|\bdoi\b|网站访问量|总访问量|扫描手机二维码)", value, re.I)
+        and value not in {"研究方向", "研究领域", "论文成果", "科研项目", "教学资源"}
+    ]
+    return cleaned
+
+
+def _research_topics(text: str) -> list[str]:
+    """Public compatibility wrapper with the audited 20-topic safety cap."""
+    return _research_topics_all(text)[:20]
 
 
 def _recruitment_status(text: str) -> str | None:
@@ -508,11 +520,13 @@ def _process_record(
     """
     profile_text = ""
     research_topics: list[str] = []
+    extracted_topics: list[str] = []
     recruitment_status: str | None = None
     try:
         profile_html = fetch_profile(client, record["profile_url"])
         profile_text = _visible_text(profile_html)
-        research_topics = _research_topics(profile_text)
+        extracted_topics = _research_topics_all(profile_text)
+        research_topics = extracted_topics[:20]
         recruitment_status = _recruitment_status(profile_text)
     except Exception as exc:  # noqa: BLE001
         warnings.append(
@@ -526,6 +540,8 @@ def _process_record(
     record.update(
         {
             "research_topics": research_topics,
+            "topics_extracted_count": len(extracted_topics),
+            "topics_truncated": len(extracted_topics) > 20,
             "recruitment_status": recruitment_status,
             "profile_text": profile_text,
             "affiliation": USTC_AFFILIATION,
