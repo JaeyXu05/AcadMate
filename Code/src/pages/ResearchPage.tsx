@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAutoScroll } from '../utils/useAutoScroll';
 import { Button, Empty, Input, Modal, Select, Spin, message } from 'antd';
-import { BookOpen, Check, ChevronRight, FileText, MessageCircle, Plus, Search as SearchIcon, Send, Target } from 'lucide-react';
+import { BookOpen, Check, ChevronRight, FileText, MessageCircle, Plus, Search as SearchIcon, Send, Square, Target } from 'lucide-react';
 import * as conversationsApi from '../services/conversations';
 import type { Conversation, ConversationMessage, ConversationSummary } from '../services/conversations';
 import * as researchApi from '../services/research';
@@ -12,33 +12,6 @@ import { apiErrorMessage } from '../services/axios';
 import { useMissionStore } from '../stores/missionStore';
 import type { RuntimeEvent } from '../types/search';
 import styles from './ResearchPage.module.css';
-
-function extractPaperQuery(text: string): string | null {
-  const trimmed = text.trim().replace(/[。.!！?？]+$/g, '');
-  if (!trimmed) return null;
-  const patterns = [
-    /(?:请|帮我)?(?:检索|搜索|查找|搜|查|找)\s*(?:一下)?\s*[「『《“"']?(.+?)[」』》”"']?\s*(?:这篇|这篇的)?\s*论文/,
-    /(?:请|帮我)?(?:检索|搜索|查找)\s*(?:一下)?\s*(.+)$/,
-    /(?:论文|paper)\s*[:：]\s*(.+)$/i,
-  ];
-  for (const pattern of patterns) {
-    const matched = trimmed.match(pattern);
-    const query = matched?.[1]?.trim().replace(/^[\s《»「」『』"'“”]+|[\s《»「」『』"'“”]+$/g, '');
-    if (query && query.length >= 2 && query.length <= 200) return query;
-  }
-  return null;
-}
-
-function formatPaperCandidates(result: papersApi.PaperSearchResponse): string {
-  if (!result.candidates?.length) {
-    return result.warnings?.[0] || `没有找到与「${result.query}」匹配的论文。可以换个完整标题、DOI 或 arXiv id 再试。`;
-  }
-  const lines = result.candidates.slice(0, 8).map((item, index) => {
-    const meta = [item.year, item.source, item.arxiv_id || item.doi].filter(Boolean).join(' · ');
-    return `${index + 1}. ${item.title}${meta ? `（${meta}）` : ''}`;
-  });
-  return `已从 ${result.source} 检索到 ${result.candidates.length} 篇候选，并填入右侧「论文检索」。点选一篇后可点「分析当前论文」。\n\n${lines.join('\n')}`;
-}
 
 function emitResearchEvent(
   ingestEvent: (event: RuntimeEvent) => void,
@@ -58,6 +31,18 @@ function emitResearchEvent(
   });
 }
 
+const ANSWER_SECTION_TITLES = new Set(['当前判断', '证据与缺口', '下一步']);
+
+function renderResearchAnswer(content: string) {
+  return content.split('\n').map((line, index) => {
+    const normalized = line.trim().replace(/[：:]$/, '');
+    if (ANSWER_SECTION_TITLES.has(normalized)) {
+      return <strong className={styles.answerSectionTitle} key={`${index}-${line}`}>{line}</strong>;
+    }
+    return <span className={styles.answerLine} key={`${index}-${line}`}>{line || '\u00a0'}</span>;
+  });
+}
+
 function ResearchPage() {
   const [projects, setProjects] = useState<ResearchProject[]>([]);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -69,6 +54,8 @@ function ResearchPage() {
   const [loading, setLoading] = useState(true);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [sending, setSending] = useState(false);
+  const [streamingStatus, setStreamingStatus] = useState('');
+  const requestControllerRef = useRef<AbortController | null>(null);
   const [projectModal, setProjectModal] = useState(false);
   const [projectName, setProjectName] = useState('');
   const [projectGoal, setProjectGoal] = useState('');
@@ -83,6 +70,8 @@ function ResearchPage() {
   const resetMission = useMissionStore((state) => state.reset);
   const { scrollerRef: messagesRef, endRef: messagesEndRef, onScroll: onMessagesScroll } = useAutoScroll([messages, sending, paperCandidates]);
   const { scrollerRef: contextRef, endRef: contextEndRef, onScroll: onContextScroll } = useAutoScroll([paperCandidates, paperQuery, searchingPapers]);
+
+  useEffect(() => () => requestControllerRef.current?.abort(), []);
 
   const selectedProject = useMemo(
     () => projects.find((item) => item.id === selectedProjectId) ?? null,
@@ -120,6 +109,25 @@ function ResearchPage() {
           setSelectedPaperTitle('');
           setPaperCandidates([]);
           setPaperSessionId(null);
+          if (items[0]) {
+            setLoadingConversation(true);
+            try {
+              const conversation = await conversationsApi.getConversation(items[0].id);
+              if (!cancelled) {
+                setSelectedConversation(conversation);
+                setMessages(conversation.messages || []);
+                const metadata = conversation.metadata || {};
+                const activePaperId = Number(metadata.active_paper_id);
+                setSelectedPaperId(Number.isInteger(activePaperId) && activePaperId > 0 ? activePaperId : null);
+                setSelectedPaperTitle(typeof metadata.active_paper_title === 'string' ? metadata.active_paper_title : '');
+              }
+            } finally {
+              if (!cancelled) setLoadingConversation(false);
+            }
+          } else {
+            setSelectedConversation(null);
+            setMessages([]);
+          }
         }
       } catch (error: unknown) {
         if (!cancelled) message.error(apiErrorMessage(error, '科研会话加载失败'));
@@ -197,7 +205,6 @@ function ResearchPage() {
     if (!text || sending) return;
     setDraft('');
     setSending(true);
-    const paperQueryFromChat = extractPaperQuery(text);
     let conversation = selectedConversation;
     try {
       if (!conversation) {
@@ -216,43 +223,38 @@ function ResearchPage() {
       setMessages((current) => [...current, userMessage, {
         id: assistantId,
         role: 'assistant',
-        content: paperQueryFromChat ? '正在检索论文…' : '',
+        content: '',
         created_at: new Date().toISOString(),
       }]);
-      if (paperQueryFromChat) {
-        resetMission();
-        emitResearchEvent(ingestEvent, 'WORKFLOW_CREATED', 'input_understanding', '已收到论文检索请求');
-        emitResearchEvent(ingestEvent, 'PLAN_READY', 'planning', '准备检索论文', {
-          steps: [
-            { step_id: 'input_understanding', agent_name: 'research_workbench' },
-            { step_id: 'mentor_research', agent_name: 'paper_search' },
-            { step_id: 'result_composer', agent_name: 'research_workbench' },
-          ],
-        });
-        setPaperQuery(paperQueryFromChat);
-        void searchPapers(paperQueryFromChat).then((result) => {
-          if (!result) return;
-          setMessages((current) => current.map((item) => (
-            item.id === assistantId && (item.content === '正在检索论文…' || !item.content.trim())
-              ? { ...item, content: formatPaperCandidates(result) }
-              : item
-          )));
-        });
-      }
+      resetMission();
+      emitResearchEvent(ingestEvent, 'WORKFLOW_CREATED', 'input_understanding', '科研模型已接收问题');
+      setStreamingStatus('正在判断问题并组织已有证据…');
+      const controller = new AbortController();
+      requestControllerRef.current = controller;
       await conversationsApi.streamConversationMessage(conversation.id, text, (event) => {
+        if (event.type === 'run_started') setStreamingStatus('模型已开始处理；需要论文事实时会调用检索工具…');
         if (event.type === 'agent_chunk' && event.message) {
+          setStreamingStatus('');
           setMessages((current) => current.map((item) => {
             if (item.id !== assistantId) return item;
-            const previous = item.content === '正在检索论文…' ? '' : item.content;
-            return { ...item, content: previous + event.message };
+            return { ...item, content: item.content + event.message };
           }));
+        } else if (event.type === 'agent_chunk' && event.payload?.mode === 'updates') {
+          setStreamingStatus('正在调用科研工具并核对结果…');
         }
         if (event.type === 'run_completed' && event.message) {
+          setStreamingStatus('');
           setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: event.message! } : item));
           emitResearchEvent(ingestEvent, 'WORKFLOW_COMPLETED', 'completed', '科研助手已完成回复');
         }
         if (event.type === 'run_failed' && event.error) {
-          setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: `这次处理没有完成：${event.error}` } : item));
+          setStreamingStatus('');
+          setMessages((current) => current.map((item) => item.id === assistantId ? {
+            ...item,
+            content: item.content.trim()
+              ? `${item.content}\n\n（${event.error}）`
+              : `这次处理没有完成：${event.error}`,
+          } : item));
           emitResearchEvent(ingestEvent, 'WORKFLOW_FAILED', 'failed', event.error);
         }
         if (event.type === 'run_waiting_for_user') {
@@ -263,7 +265,7 @@ function ResearchPage() {
               : '需要你确认后才能继续。请在右侧论文检索中选择一篇，或直接告诉我选哪一篇。',
           } : item));
         }
-      }, { activePaperId: selectedPaperId ?? undefined, activePaperTitle: selectedPaperTitle });
+      }, { signal: controller.signal, activePaperId: selectedPaperId ?? undefined, activePaperTitle: selectedPaperTitle });
       const refreshed = await conversationsApi.getConversation(conversation.id);
       setSelectedConversation(refreshed);
       const serverMessages = refreshed.messages || [];
@@ -278,16 +280,35 @@ function ResearchPage() {
       });
       setConversations((current) => [refreshed, ...current.filter((item) => item.id !== refreshed.id)]);
     } catch (error: unknown) {
-      setMessages((current) => [...current, { id: -Date.now(), role: 'assistant', content: apiErrorMessage(error, '科研 Agent 暂时不可用，请稍后重试'), created_at: new Date().toISOString() }]);
-      emitResearchEvent(ingestEvent, 'WORKFLOW_FAILED', 'failed', apiErrorMessage(error, '科研 Agent 暂时不可用'));
+      const cancelled = error instanceof Error && error.name === 'AbortError';
+      const detail = cancelled
+        ? '已停止本次处理；已经显示的内容会保留。'
+        : error instanceof Error && error.message
+          ? error.message
+          : apiErrorMessage(error, '科研 Agent 暂时不可用，请稍后重试');
+      setStreamingStatus('');
+      setMessages((current) => {
+        const lastAssistant = [...current].reverse().find((item) => item.role === 'assistant');
+        if (lastAssistant && !lastAssistant.content.trim()) {
+          return current.map((item) => item.id === lastAssistant.id ? { ...item, content: detail } : item);
+        }
+        return current;
+      });
+      emitResearchEvent(ingestEvent, cancelled ? 'WORKFLOW_CANCELLED' : 'WORKFLOW_FAILED', 'failed', detail);
     } finally {
+      requestControllerRef.current = null;
       setSending(false);
+      setStreamingStatus('');
     }
   };
 
   const send = () => {
     const text = draft.trim();
     if (text) void sendText(text);
+  };
+
+  const cancelSend = () => {
+    requestControllerRef.current?.abort();
   };
 
   const searchPapers = async (overrideQuery?: string, overrideSource?: 'local' | 'arxiv' | 'openalex'): Promise<papersApi.PaperSearchResponse | null> => {
@@ -433,14 +454,22 @@ function ResearchPage() {
             ) : messages.map((item) => (
               <div key={item.id} className={`${styles.message} ${item.role === 'user' ? styles.userMessage : styles.agentMessage}`}>
                 <div className={styles.messageRole}>{item.role === 'user' ? '你' : '科研助手'}</div>
-                <div className={styles.messageContent}>{item.content || (sending ? '正在思考…' : '')}</div>
+                <div className={styles.messageContent}>
+                  {item.role === 'assistant'
+                    ? renderResearchAnswer(item.content || (sending ? streamingStatus || '正在组织回答…' : ''))
+                    : item.content}
+                </div>
               </div>
             ))}
             <div ref={messagesEndRef} />
           </div>
           <div className={styles.composer}>
             <Input.TextArea value={draft} onChange={(event) => setDraft(event.target.value)} onPressEnter={(event) => { if (!event.shiftKey) { event.preventDefault(); void send(); } }} autoSize={{ minRows: 2, maxRows: 6 }} disabled={sending} placeholder="和科研助手聊聊，普通问题也可以…" />
-            <Button type="primary" icon={<Send size={15} />} loading={sending} disabled={!draft.trim()} onClick={() => void send()}>发送</Button>
+            {sending ? (
+              <Button danger icon={<Square size={13} />} onClick={cancelSend}>停止</Button>
+            ) : (
+              <Button type="primary" icon={<Send size={15} />} disabled={!draft.trim()} onClick={() => void send()}>发送</Button>
+            )}
           </div>
         </main>
 

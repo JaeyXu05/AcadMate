@@ -9,6 +9,8 @@ from backend.api.routers.mentor_workflows import (
     MentorWorkflowRuntime,
     get_mentor_workflow_runtime,
 )
+from backend.db.models import AgentRun
+from backend.db.types import RunStatus, WorkflowName
 from backend.harness.contracts import RunCreate, RunCreated
 from backend.harness.email_skill import email_compose_result, start_email_compose
 from backend.harness.mentor_skill import mentor_match_result, start_mentor_match
@@ -24,10 +26,13 @@ from backend.harness.productivity_skill import (
     queue_progress_report,
     start_plan_coach,
 )
-from backend.harness.research_skill import skill_result, start_direction_explore, start_research_task
+from backend.harness.profile_skill import profile_analyze_result, start_profile_analyze
+from backend.harness.research_skill import (
+    skill_result,
+    start_direction_explore,
+    start_research_task,
+)
 from backend.harness.runtime import suggest_next_skill
-from backend.db.models import AgentRun
-from backend.db.types import RunStatus, WorkflowName
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -95,6 +100,8 @@ def create_run(
         return created
     if skill_id == "plan_coach":
         return start_plan_coach(request, session)
+    if skill_id == "profile_analyze":
+        return start_profile_analyze(request, session)
     raise HTTPException(status_code=400, detail=f"unknown skill_id: {skill_id}")
 
 
@@ -133,6 +140,8 @@ def get_harness_result(
             return productivity_result(run_id, session, run.workflow, "progress_report")
         if run.workflow == WorkflowName.plan_coach.value:
             return productivity_result(run_id, session, run.workflow, "plan_coach")
+        if run.workflow == WorkflowName.profile_analyze.value:
+            return profile_analyze_result(run_id, session)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     raise HTTPException(status_code=404, detail=f"unsupported workflow: {run.workflow}")

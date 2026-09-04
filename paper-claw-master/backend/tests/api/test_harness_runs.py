@@ -298,3 +298,112 @@ def test_research_task_requires_cited_paper_evidence(client):
     )
     assert passed.json()["review_status"] == "PASS"
     assert passed.json()["evidence_refs"] == ["paper_chunk:1:41", "paper_chunk:1:42"]
+
+
+def test_profile_analyze_is_model_backed_and_keeps_evidence_boundary(client, monkeypatch):
+    from backend.settings import clear_settings_cache
+
+    monkeypatch.setenv("PAPER_CLAW_CHAT_MODEL", "test-model")
+    clear_settings_cache()
+    model_payload = {
+        "summary": "目前已经形成计算机视觉兴趣与 Python 自述基础，但可复现实验与调试证据仍然不足，需要用一个小型复现实验把兴趣转成可核验能力。",
+        "capabilities": [
+            {
+                "name": "Python",
+                "level": "implemented",
+                "assessment": "用户填写了 Python 技能，尚无审核产物证明实现深度。",
+                "evidence_status": "reviewed",
+                "evidence_refs": ["profile:skills", "invented:ref"],
+            },
+            {
+                "name": "基线复现",
+                "level": "reproduced",
+                "assessment": "平台记录了一次带论文片段证据的复现实验。",
+                "evidence_status": "reviewed",
+                "evidence_refs": ["growth:verified_experiences:exp-1", "paper_chunk:1:41"],
+            },
+        ],
+        "directions": [
+            {
+                "name": "计算机视觉",
+                "status": "interest",
+                "rationale": "来自用户填写的研究兴趣。",
+                "evidence_refs": ["profile:interests"],
+            }
+        ],
+        "gaps": [
+            {
+                "gap": "缺少可复现实验",
+                "why_it_matters": "无法判断是否已经具备独立实现和调试能力。",
+                "evidence_refs": [],
+            }
+        ],
+        "next_actions": [
+            {
+                "action": "复现一个公开视觉基线",
+                "deliverable": "代码仓库与一页实验记录",
+                "acceptance_criteria": ["固定随机种子运行成功", "记录指标与一次失败排查"],
+                "evidence_refs": ["profile:interests"],
+            }
+        ],
+        "missing_information": ["尚无代码或实验产物证据"],
+    }
+    monkeypatch.setattr(
+        "backend.harness.profile_skill.OpenAICompatibleChatModelAdapter.generate_text",
+        lambda self, provider, messages: __import__("json").dumps(model_payload, ensure_ascii=False),
+    )
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "skill_id": "profile_analyze",
+            "message": "生成科研画像",
+            "context": {
+                "profile": {"major": "计算机科学", "interests": ["计算机视觉"], "skills": ["Python"]},
+                "growth": {
+                    "verified_experiences": [
+                        {
+                            "id": "exp-1",
+                            "summary": "完成基线复现",
+                            "review_status": "PASS",
+                            "evidence_refs": ["paper_chunk:1:41"],
+                        }
+                    ]
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "succeeded"
+    assert payload["artifact"]["generation"]["agent"] == "research_profile_agent"
+    capability = payload["artifact"]["capabilities"][0]
+    assert capability["evidence_status"] == "self_reported"
+    assert capability["level"] == "unknown"
+    assert capability["evidence_refs"] == ["profile:skills"]
+    reviewed_capability = payload["artifact"]["capabilities"][1]
+    assert reviewed_capability["evidence_status"] == "reviewed"
+    assert reviewed_capability["level"] == "reproduced"
+    assert "invented:ref" not in payload["evidence_refs"]
+
+
+def test_profile_analyze_requires_real_input_and_skips_model(client, monkeypatch):
+    called = False
+
+    def unexpected_model(*args, **kwargs):
+        nonlocal called
+        called = True
+        return "{}"
+
+    monkeypatch.setattr(
+        "backend.harness.profile_skill.OpenAICompatibleChatModelAdapter.generate_text",
+        unexpected_model,
+    )
+    response = client.post(
+        "/api/runs",
+        json={"skill_id": "profile_analyze", "message": "生成科研画像", "context": {}},
+    )
+    assert response.status_code == 200
+    assert response.json()["review_status"] == "NEED_MORE_INPUT"
+    assert called is False

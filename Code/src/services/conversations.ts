@@ -76,6 +76,8 @@ export interface PaperClawStreamEvent {
   message?: string;
   error?: string;
   payload?: Record<string, unknown>;
+  event_type?: string;
+  sequence?: number;
 }
 
 function token(): string {
@@ -99,7 +101,12 @@ export async function streamConversationMessage(
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new Error(body || `请求失败（HTTP ${response.status}）`);
+    let detail = body;
+    try {
+      const payload = JSON.parse(body) as { message?: unknown; error?: unknown };
+      detail = [payload.message, payload.error].find((item) => typeof item === 'string' && item.trim()) as string || body;
+    } catch { /* 非 JSON 错误正文原样保留 */ }
+    throw new Error(detail || `请求失败（HTTP ${response.status}）`);
   }
   if (!response.body) throw new Error('响应体不可读');
   const reader = response.body.getReader();

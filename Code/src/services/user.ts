@@ -1,6 +1,38 @@
 import api from './axios';
 import type { FavoriteItem, GrowthState, ServerSettings, HistoryPage } from '../types/auth';
 
+export type ResearchCapabilityLevel = 'seen' | 'understood' | 'implemented' | 'reproduced' | 'debugged' | 'experimented' | 'innovated' | 'unknown';
+
+export interface ResearchProfile {
+  type: 'research_profile';
+  summary: string;
+  capabilities: Array<{
+    name: string;
+    level: ResearchCapabilityLevel;
+    assessment: string;
+    evidence_status: 'self_reported' | 'reviewed' | 'unknown';
+    evidence_refs: string[];
+  }>;
+  directions: Array<{
+    name: string;
+    status: 'interest' | 'hypothesis' | 'supported' | 'unknown';
+    rationale: string;
+    evidence_refs: string[];
+  }>;
+  gaps: Array<{ gap: string; why_it_matters: string; evidence_refs: string[] }>;
+  next_actions: Array<{ action: string; deliverable: string; acceptance_criteria: string[]; evidence_refs: string[] }>;
+  missing_information: string[];
+  evidence_refs: string[];
+  generated_at: string;
+  review_status: string;
+  source_signature?: string;
+}
+
+export interface ResearchProfileResponse {
+  profile: ResearchProfile | null;
+  stale: boolean;
+}
+
 // ===== 用户信息 =====
 
 /** 更新用户信息 */
@@ -38,6 +70,29 @@ export async function getGrowth(): Promise<GrowthState> {
     artifacts: Array.isArray(data?.artifacts) ? data.artifacts : [],
     research_tasks: Array.isArray(data?.research_tasks) ? data.research_tasks : [],
     direction_hypotheses: Array.isArray(data?.direction_hypotheses) ? data.direction_hypotheses : [],
+  };
+}
+
+export async function getResearchProfile(): Promise<ResearchProfileResponse> {
+  const data = (await api.get<ResearchProfileResponse>('/user/research-profile')).data;
+  return { profile: normalizeResearchProfile(data?.profile), stale: Boolean(data?.stale) };
+}
+
+export async function generateResearchProfile(): Promise<ResearchProfileResponse> {
+  const data = (await api.post<ResearchProfileResponse>('/user/research-profile')).data;
+  return { profile: normalizeResearchProfile(data?.profile), stale: Boolean(data?.stale) };
+}
+
+function normalizeResearchProfile(value: ResearchProfile | null | undefined): ResearchProfile | null {
+  if (!value || value.type !== 'research_profile' || typeof value.summary !== 'string') return null;
+  return {
+    ...value,
+    capabilities: Array.isArray(value.capabilities) ? value.capabilities : [],
+    directions: Array.isArray(value.directions) ? value.directions : [],
+    gaps: Array.isArray(value.gaps) ? value.gaps : [],
+    next_actions: Array.isArray(value.next_actions) ? value.next_actions : [],
+    missing_information: Array.isArray(value.missing_information) ? value.missing_information : [],
+    evidence_refs: Array.isArray(value.evidence_refs) ? value.evidence_refs : [],
   };
 }
 

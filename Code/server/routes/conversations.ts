@@ -1,7 +1,13 @@
 import { Router, Response } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getDb } from '../db';
-import { agentBase, agentTimeoutMs, agentUrl, probeAgent } from '../harnessClient';
+import { agentBase, agentUrl, probeAgent } from '../harnessClient';
+import {
+  RESEARCH_ASSISTANT_INSTRUCTIONS,
+  explainResearchStreamError,
+  researchAgentOverrides,
+  researchAgentTimeoutMs,
+} from '../researchRuntime';
 
 export const conversationsRouter = Router();
 conversationsRouter.use(authMiddleware);
@@ -192,9 +198,11 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
+  const timeoutMs = researchAgentTimeoutMs();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   res.on('close', () => controller.abort());
   let settled = false;
+  let assistantText = '';
   try {
     const activeGoal = conversation.active_goal_id
       ? db.prepare('SELECT id, version, title, description, status FROM conversation_goals WHERE id=? AND user_id=?').get(conversation.active_goal_id, req.userId!)
@@ -203,6 +211,7 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
       'SELECT name, description, prompt_template, permissions FROM custom_skills WHERE user_id=? AND status=\'enabled\' ORDER BY updated_at DESC LIMIT 6',
     ).all(req.userId!) as Array<{ name: string; description: string; prompt_template: string; permissions: string }>;
     const extraInstructions = [
+      conversation.surface === 'research' ? RESEARCH_ASSISTANT_INSTRUCTIONS : '',
       activeGoal ? `当前会话目标：${String((activeGoal as any).title || '')}${(activeGoal as any).description ? `\n目标说明：${String((activeGoal as any).description)}` : ''}` : '',
       enabledSkills.length ? `用户已启用以下声明式 Skill。仅在当前问题相关且权限允许时参考，不要声称已执行未授权工具：\n${enabledSkills.map((skill) => `- ${skill.name}：${skill.description || '无说明'}\n  指令：${String(skill.prompt_template || '').slice(0, 1800)}`).join('\n')}` : '',
     ].filter(Boolean).join('\n\n').slice(0, 10000);
@@ -213,6 +222,7 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
         thread_id: conversation.agent_thread_id || undefined,
         message,
         active_paper_id: req.body?.active_paper_id || undefined,
+        ...researchAgentOverrides(conversation.surface),
         metadata: {
           surface: conversation.surface,
           owner_id: String(req.userId!),
@@ -239,7 +249,6 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let assistantText = '';
     let terminalType = '';
     let terminalError = '';
     const consume = (line: string) => {
@@ -283,13 +292,19 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     settled = true;
     res.end();
   } catch (error) {
-    const failure = error instanceof Error ? error.message : 'PAPERCLAW Agent 调用失败';
+    const { timedOut, message: failure } = explainResearchStreamError(error, timeoutMs);
     if (!settled) {
-      persistAssistantMessage(id!, req.userId!, `这次处理没有完成：${failure}`, { source: 'paperclaw', error: true });
+      const partial = assistantText.trim();
+      persistAssistantMessage(
+        id!,
+        req.userId!,
+        partial ? `${partial}\n\n（${failure}）` : `这次处理没有完成：${failure}`,
+        { source: 'paperclaw', error: true, partial: Boolean(partial) },
+      );
     }
-    if (!res.headersSent) { res.status(502).json({ message: failure }); return; }
+    if (!res.headersSent) { res.status(timedOut ? 504 : 502).json({ message: failure }); return; }
     if (!settled) {
-      res.write(`${JSON.stringify({ type: 'run_failed', status: 'failed', error: failure })}\n`);
+      res.write(`${JSON.stringify({ type: 'run_failed', status: 'failed', error: failure, message: assistantText.trim() || undefined })}\n`);
       res.end();
     }
   } finally {
