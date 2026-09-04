@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getDb } from '../db';
 import { agentBase, agentUrl, probeAgent } from '../harnessClient';
+import { getLlmApiSettings } from '../services/llmSettings';
 import {
   RESEARCH_ASSISTANT_INSTRUCTIONS,
   explainResearchStreamError,
@@ -215,6 +216,10 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
       activeGoal ? `当前会话目标：${String((activeGoal as any).title || '')}${(activeGoal as any).description ? `\n目标说明：${String((activeGoal as any).description)}` : ''}` : '',
       enabledSkills.length ? `用户已启用以下声明式 Skill。仅在当前问题相关且权限允许时参考，不要声称已执行未授权工具：\n${enabledSkills.map((skill) => `- ${skill.name}：${skill.description || '无说明'}\n  指令：${String(skill.prompt_template || '').slice(0, 1800)}`).join('\n')}` : '',
     ].filter(Boolean).join('\n\n').slice(0, 10000);
+    const userLlm = getLlmApiSettings(req.userId!, true);
+    const userModelOverrides = userLlm.enabled && userLlm.baseUrl && userLlm.model && userLlm.apiKey
+      ? { model: userLlm.model, api_key: userLlm.apiKey, base_url: userLlm.baseUrl }
+      : {};
     const upstream = await fetch(agentUrl('/api/agent/messages/stream'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -223,6 +228,7 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
         message,
         active_paper_id: req.body?.active_paper_id || undefined,
         ...researchAgentOverrides(conversation.surface),
+        ...userModelOverrides,
         metadata: {
           surface: conversation.surface,
           owner_id: String(req.userId!),

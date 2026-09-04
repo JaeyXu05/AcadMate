@@ -13,6 +13,7 @@ const CloudPage = lazy(() => import('./pages/CloudPage'));
 const OtherPage = lazy(() => import('./pages/OtherPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const ApiSettingsPage = lazy(() => import('./pages/ApiSettingsPage'));
 const FavoritesPage = lazy(() => import('./pages/FavoritesPage'));
 const AdvisorDetailPage = lazy(() => import('./pages/AdvisorDetailPage'));
 const EmailPage = lazy(() => import('./pages/EmailPage'));
@@ -87,6 +88,7 @@ function AppRoutes() {
           <Route path="/other" element={<OtherPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/api-settings" element={<ApiSettingsPage />} />
           <Route path="/favorites" element={<FavoritesPage />} />
           <Route path="/advisor/:id" element={<AdvisorDetailPage />} />
           <Route path="/email" element={<EmailPage />} />

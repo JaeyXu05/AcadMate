@@ -4,6 +4,7 @@ import { getDb } from '../db';
 import { loadGrowthState, loadTrustedAgentContext } from '../data/growthStore';
 import { postHarnessRun } from '../harnessClient';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { getLlmApiSettings, saveLlmApiSettings } from '../services/llmSettings';
 
 export const userRouter = Router();
 
@@ -128,6 +129,43 @@ userRouter.get('/research-profile', (req: AuthRequest, res: Response) => {
   });
 });
 
+/** GET /api/user/api-settings — 当前登录用户自己的大模型 API 配置（不回传明文 key）。 */
+userRouter.get('/api-settings', (req: AuthRequest, res: Response) => {
+  const settings = getLlmApiSettings(req.userId!);
+  res.json({
+    enabled: settings.enabled,
+    base_url: settings.baseUrl,
+    model: settings.model,
+    api_key_saved: settings.apiKeySaved,
+    updated_at: settings.updatedAt,
+  });
+});
+
+/** PUT /api/user/api-settings — 保存当前用户自己的大模型 API 配置。 */
+userRouter.put('/api-settings', (req: AuthRequest, res: Response) => {
+  const body = (req.body ?? {}) as {
+    enabled?: unknown;
+    base_url?: unknown;
+    model?: unknown;
+    api_key?: unknown;
+    remove_key?: unknown;
+  };
+  const settings = saveLlmApiSettings(req.userId!, {
+    enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
+    baseUrl: body.base_url === undefined ? undefined : String(body.base_url || ''),
+    model: body.model === undefined ? undefined : String(body.model || ''),
+    apiKey: body.api_key === undefined ? undefined : String(body.api_key || ''),
+    removeKey: body.remove_key === true,
+  });
+  res.json({
+    enabled: settings.enabled,
+    base_url: settings.baseUrl,
+    model: settings.model,
+    api_key_saved: settings.apiKeySaved,
+    updated_at: settings.updatedAt,
+  });
+});
+
 /** POST /api/user/research-profile — 用 A 端真实模型生成证据受限的科研画像。 */
 userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => {
   const context = loadTrustedAgentContext(req.userId!);
@@ -141,7 +179,10 @@ userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => 
         profile: context.profile,
         growth: context.growth,
       },
-    }, 28_000);
+      // Allow the same 120s provider budget as other model features plus
+      // headroom for the synchronous A-side profile call. A 28s cap caused
+      // valid slow DeepSeek responses to surface as "生成超时".
+    }, 150_000);
     const artifact = result?.artifact;
     const runStatus = String(result?.status || '');
     const reviewStatus = String(result?.review_status || artifact?.review_status || '');

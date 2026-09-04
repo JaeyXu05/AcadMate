@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "setup": "npm install && npm install --prefix frontend && uv sync --project backend --dev",
+    "prewarm": "uv run --project backend python -m backend.tools.semantic_prewarm",
     "db:migrate": "uv run --project backend alembic -c backend/alembic.ini upgrade head",
     "dev": "npm run db:migrate && concurrently -n backend,frontend -c green,cyan \"uv run --project backend uvicorn backend.api.app:create_app --factory --reload --host 0.0.0.0 --port 8000\" \"until python -c \\\"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/ready', timeout=1)\\\" >/dev/null 2>&1; do sleep 0.2; done; npm run dev --prefix frontend\""
   },

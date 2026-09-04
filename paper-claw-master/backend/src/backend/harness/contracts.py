@@ -39,6 +39,11 @@ class RunCreate(BaseModel):
     message: str = Field(min_length=1, max_length=10000)
     context: SharedContext = Field(default_factory=SharedContext)
     execute_immediately: bool = False
+    # Per-user LLM overrides injected by the D application. Kept out of
+    # SharedContext so the stored input/audit payload can exclude raw keys.
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    llm_model: str | None = None
 
 
 class RunCreated(BaseModel):

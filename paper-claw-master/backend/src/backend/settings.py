@@ -98,8 +98,12 @@ class Settings(BaseSettings):
     report_chat_max_tokens: int = Field(900, validation_alias=AliasChoices("PAPER_CLAW_REPORT_CHAT_MAX_TOKENS", "REPORT_AGENT_MAX_TOKENS"))
     report_chat_timeout_seconds: int = Field(55, validation_alias=AliasChoices("PAPER_CLAW_REPORT_CHAT_TIMEOUT_SECONDS", "REPORT_AGENT_TIMEOUT_SECONDS"))
 
-    embedding_api_key: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_API_KEY", "CHATAGENT_API_KEY", "CHAT_AGENT_API_KEY"))
-    embedding_base_url: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_BASE_URL", "CHATAGENT_BASE_URL", "CHATAGENT_API_BASE", "CHATAGENT_API_BASE_URL", "CHAT_AGENT_BASE_URL"))
+    # Do not share CHATAGENT_* aliases with the chat fields above: pydantic
+    # resolves a shared alias on every matching field, so a PAPER_CLAW_CHAT_*
+    # value silently overwrites the embedding config too.  The shared-endpoint
+    # fallback is implemented explicitly in backend.services.providers.
+    embedding_api_key: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_API_KEY"))
+    embedding_base_url: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_BASE_URL"))
     embedding_provider: str = "openai_compatible"
     embedding_model: str | None = None
     embedding_dimension: int = 1536
@@ -134,13 +138,27 @@ class Settings(BaseSettings):
     llama_parse_image_min_pixels: int = 200000
 
     def model_post_init(self, __context: object) -> None:
-        self.data_dir = self.data_dir.expanduser().resolve()
+        # PAPER_CLAW_DATA_DIR may be relative ("./data"). Resolve it against the
+        # repository root, not the process working directory, so data and model
+        # caches live in one deterministic location regardless of launch folder.
+        data_dir = self.data_dir.expanduser()
+        self.data_dir = (data_dir if data_dir.is_absolute() else REPO_ROOT / data_dir).resolve()
         if self.storage_root is None:
             self.storage_root = self.data_dir / "files"
         else:
-            self.storage_root = self.storage_root.expanduser().resolve()
+            storage_root = self.storage_root.expanduser()
+            self.storage_root = (
+                storage_root
+                if storage_root.is_absolute()
+                else (REPO_ROOT / storage_root).resolve()
+            ).resolve()
         if self.embedding_cache_dir is not None:
-            self.embedding_cache_dir = self.embedding_cache_dir.expanduser().resolve()
+            embedding_cache_dir = self.embedding_cache_dir.expanduser()
+            self.embedding_cache_dir = (
+                embedding_cache_dir
+                if embedding_cache_dir.is_absolute()
+                else (REPO_ROOT / embedding_cache_dir).resolve()
+            ).resolve()
         else:
             self.embedding_cache_dir = self.data_dir / ".embedding_cache"
 

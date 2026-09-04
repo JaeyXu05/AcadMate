@@ -18,11 +18,11 @@ from sqlalchemy.orm import Session
 from backend.db.repositories import AgentRunRepository
 from backend.db.types import RunStatus, WorkflowName
 from backend.harness.contracts import RunCreate, RunCreated
+from backend.harness.provider_overrides import provider_for_run
 from backend.harness.runtime import suggest_next_skill
 from backend.integrations.llm.openai_compatible import OpenAICompatibleChatModelAdapter
 from backend.schemas import ProviderResolutionError
 from backend.services.mentor_semantic_retrieval import SemanticMentorHit, get_mentor_semantic_index
-from backend.services.providers import chat_provider_from_settings
 from backend.settings import get_settings
 from backend.tools.context import tool_session
 
@@ -194,7 +194,7 @@ def pdf_analyze_result(run_id: int, session: Session) -> RunCreated:
 def _rerank_with_model(request: RunCreate, passages: list[dict[str, Any]], hits: list[SemanticMentorHit]) -> PdfResearchAnalysis:
     settings = get_settings()
     try:
-        provider = chat_provider_from_settings(settings).model_copy(deep=True)
+        provider = provider_for_run(request).model_copy(deep=True)
     except ProviderResolutionError as exc:
         # PDF mentor analysis must remain usable in the default offline setup.
         # Dense semantic recall is already local; only the optional second-pass
@@ -268,8 +268,14 @@ def _rerank_without_model(
     first_text = " ".join(str(item.get("text") or "").strip() for item in passages[:3]).strip()
     if len(first_text) > 320:
         first_text = first_text[:320].rstrip() + "…"
+    lexical_fallback = any(getattr(hit, "mode", "dense") == "lexical_fallback" for hit in hits)
+    retrieval_description = (
+        "本地关键词回退检索"
+        if lexical_fallback
+        else "本地多语种语义检索"
+    )
     document_summary = (
-        f"已抽取 PDF 正文 {len(page_numbers)} 页，并使用本地多语种语义检索完成导师候选排序。"
+        f"已抽取 PDF 正文 {len(page_numbers)} 页，并使用{retrieval_description}完成导师候选排序。"
         + (f"材料开头摘要：{first_text}" if first_text else "")
     )
     decisions: list[PdfMentorDecision] = []
@@ -288,13 +294,21 @@ def _rerank_without_model(
             candidate_id=candidate.candidate_id,
             fit_score=round(fit_score, 2),
             rationale=(
-                "本地多语种语义相似度排序；候选已核验研究方向为："
+                (f"{retrieval_description}；" if lexical_fallback else "本地多语种语义相似度排序；")
+                + "候选已核验研究方向为："
                 + ("、".join(topics) if topics else "未提供")
                 + "。该结果未经过聊天模型重排。"
             ),
             matched_capabilities=topics,
             page_numbers=allowed_pages[:3],
-            uncertainties=["未配置聊天模型，未执行 LLM 重排；请结合导师主页和 PDF 原文人工复核。"],
+            uncertainties=[
+                (
+                    "本地向量模型暂不可用，本次为关键词回退结果，只做保守召回；"
+                    if lexical_fallback
+                    else "未配置聊天模型，未执行 LLM 重排；"
+                )
+                + "请结合导师主页和 PDF 原文人工复核。"
+            ],
         ))
     return PdfResearchAnalysis(
         document_summary=document_summary,
@@ -357,7 +371,9 @@ def _validated_advisors(
             "tags": candidate.research_topics[:8],
             "papers": 0,
             "matchScore": round(decision.fit_score),
-            "scoreKind": "calibrated_pdf_relevance",
+            "scoreKind": "keyword_pdf_fallback"
+            if getattr(hit, "mode", "dense") == "lexical_fallback"
+            else "calibrated_pdf_relevance",
             "semanticRecallScore": round(hit.score * 100, 2),
             "explanation": decision.rationale,
             "matchedCapabilities": decision.matched_capabilities,

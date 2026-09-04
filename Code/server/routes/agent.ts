@@ -21,6 +21,7 @@ import {
 import { persistUploadedPdf, loadResearchDocument } from '../data/researchDocuments';
 import { cleanTopics } from '../data/topicBoilerplate';
 import { getDb } from '../db';
+import { getLlmApiSettings } from '../services/llmSettings';
 import { ragStore, ragData, toLightAdvisor } from '../data/ragAdvisors';
 import { retrieveQualifiedMentors, reviewMatches, relevanceThreshold, keepDisplayableAdvisors, longTermInterestTerms } from '../data/mentorRetrieval';
 import { extractPdfPages, extractPdfText } from './pdfText';
@@ -789,10 +790,18 @@ async function proxyToPaperClawChat(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
   try {
+    const userLlm = getLlmApiSettings(userId, true);
+    const userModelOverrides = userLlm.enabled && userLlm.baseUrl && userLlm.model && userLlm.apiKey
+      ? { model: userLlm.model, api_key: userLlm.apiKey, base_url: userLlm.baseUrl }
+      : {};
     const upstream = await fetch(agentUrl('/api/agent/messages/stream'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, metadata: { surface: 'search', owner_id: String(userId) } }),
+      body: JSON.stringify({
+        message,
+        ...userModelOverrides,
+        metadata: { surface: 'search', owner_id: String(userId) },
+      }),
       signal: controller.signal,
     });
     if (!upstream.ok || !upstream.body) return { ok: false, error: `PAPERCLAW Agent 调用失败（HTTP ${upstream.status}）` };

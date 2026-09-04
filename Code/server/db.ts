@@ -795,6 +795,12 @@ export function ensureProductivitySchema(database: Database.Database): void {
   // codex/v2-profile-research-output 分支的用户研究画像字段（与 v2.0-clean 对齐）。
   ensureColumn(database, 'users', 'research_profile_json', "research_profile_json TEXT NOT NULL DEFAULT '{}'");
   ensureColumn(database, 'users', 'research_profile_updated_at', 'research_profile_updated_at TEXT');
+  // 每用户 LLM API 配置（登录用户自己的模型 key；密码列加密存储）。
+  ensureColumn(database, 'user_settings', 'llm_enabled', 'llm_enabled INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(database, 'user_settings', 'llm_base_url', "llm_base_url TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'user_settings', 'llm_model', "llm_model TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'user_settings', 'llm_api_key_encrypted', "llm_api_key_encrypted TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'user_settings', 'llm_updated_at', 'llm_updated_at TEXT');
   // 旧库可能已把 user_version 推到 19+ 但当时 17-21 是 report/plans 内容，
   // 邮箱/PDF 表从未建出：这里幂等补建，保证邮件与 PDF 分析功能可用。
   database.exec(EMAIL_ACCOUNTS_DDL);

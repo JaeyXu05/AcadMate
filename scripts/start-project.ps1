@@ -4,6 +4,8 @@ param(
     [switch]$Prepare,
     [switch]$LaunchOnly,
     [switch]$NoBrowser,
+    [switch]$RunSmoke,
+    [switch]$ConfigureApi,
     [switch]$SkipInstall,
     [switch]$PauseOnFailure
 )
@@ -235,6 +237,31 @@ function Ensure-Dependencies([string]$Npm, [string]$Uv) {
     if ($LASTEXITCODE -ne 0) { Stop-Startup 'uv sync failed. Check network/proxy settings and available disk space.' }
 }
 
+function Ensure-SemanticIndex([string]$Python) {
+    $cacheDir = Join-Path $PaperRoot 'data\.embedding_cache'
+    $candidateCache = Get-ChildItem -LiteralPath $cacheDir -Filter 'paper_claw_mentor_index_*_candidate.npz' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $topicCache = Get-ChildItem -LiteralPath $cacheDir -Filter 'paper_claw_mentor_index_*_topic.npz' -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($candidateCache -and $topicCache) {
+        Write-Ok 'Local mentor semantic index is already cached'
+        return
+    }
+    Write-Step 'Preparing the local mentor semantic index (first run may download the ~100 MB model)'
+    Write-Warn 'If the download fails on a restricted network, core mentor retrieval still starts; PDF semantic analysis will retry later.'
+    $prewarmLog = Join-Path $LogRoot 'semantic-prewarm.log'
+    Push-Location $PaperRoot
+    try {
+        $command = "`"$Python`" -m backend.tools.semantic_prewarm 1>>`"$prewarmLog`" 2>&1"
+        & $env:ComSpec /d /c $command
+        $exitCode = $LASTEXITCODE
+        if (Test-Path -LiteralPath $prewarmLog) { Get-Content -LiteralPath $prewarmLog -Tail 30 | Write-Host }
+        if ($exitCode -ne 0) {
+            Write-Warn "Semantic index preparation did not finish (exit $exitCode). See $prewarmLog. The app will still start."
+        } else {
+            Write-Ok 'Local mentor semantic index is ready'
+        }
+    } finally { Pop-Location }
+}
+
 function Start-Postgres([string]$Docker) {
     Write-Step "Starting PostgreSQL (Compose project: $($Config.ComposeProject))"
     & $Docker compose --project-name $Config.ComposeProject -f (Join-Path $PaperRoot 'docker-compose.yml') up -d postgres
@@ -279,7 +306,14 @@ function Apply-Migrations([string]$Docker, [string]$Uv) {
 function Invoke-Json([string]$Url, [int]$TimeoutSeconds = 3) { try { return (Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec $TimeoutSeconds).Content | ConvertFrom-Json } catch { return $null } }
 function Test-AService { $payload = Invoke-Json $Config.AHealthUrl; return $null -ne $payload -and $payload.status -eq 'ok' }
 function Test-DService { $payload = Invoke-Json $Config.DHealthUrl; return $null -ne $payload -and $payload.status -eq 'ok' -and $payload.rag.ready -eq $true -and [int]$payload.rag.count -gt 0 }
-function Test-Frontend { try { $body = (Invoke-WebRequest -UseBasicParsing -Uri $Config.FrontendUrl -TimeoutSec 3).Content; return $body -match 'id="root"' -and $body -match 'src="/src/main\.tsx"' } catch { return $false } }
+function Test-Frontend {
+    try {
+        $body = (Invoke-WebRequest -UseBasicParsing -Uri $Config.FrontendUrl -TimeoutSec 3).Content
+        # Vite may append a cache-busting query (?t=...) to /src/main.tsx, so
+        # match the module path without requiring an exact closing quote.
+        return $body -match 'id="root"' -and $body -match 'src="/src/main\.tsx'
+    } catch { return $false }
+}
 function Test-PortListening([int]$Port) { return $null -ne (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1) }
 function Wait-Check([string]$Name, [scriptblock]$Check, [int]$TimeoutSeconds) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -322,14 +356,36 @@ try {
     Ensure-EnvFiles; Initialize-RuntimeConfig
     if ($LaunchOnly) {
         $tools = Ensure-Node; Test-RuntimeData $tools.Node; $tools.Uv = Ensure-Uv; $tools.Docker = Ensure-Docker; Assert-PreparedEnvironment
-        Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv; Start-ApplicationServices $tools
+        Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv
+        Ensure-SemanticIndex (Join-Path $BackendRoot '.venv\Scripts\python.exe')
+        $paperEnv = Join-Path $PaperRoot '.env'
+        $hasChatBase = Get-EnvValue $paperEnv 'PAPER_CLAW_CHAT_BASE_URL' ''
+        $hasChatModel = Get-EnvValue $paperEnv 'PAPER_CLAW_CHAT_MODEL' ''
+        $hasChatKey = Get-EnvValue $paperEnv 'PAPER_CLAW_CHAT_API_KEY' ''
+        $needsChatConfig = -not ($hasChatBase -and $hasChatModel -and $hasChatKey)
+        if ($ConfigureApi -or ($needsChatConfig -and -not $SkipInstall)) {
+            # Configure before A starts; stop an old A so the fresh values load.
+            $existingA = Get-NetTCPConnection -State Listen -LocalPort $Config.APort -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($existingA) { Stop-Process -Id $existingA.OwningProcess -Force -ErrorAction SilentlyContinue }
+            Write-Step 'Configure LLM API (API_KEY / BASE_URL / MODEL)'
+            & $tools.Node (Join-Path $PSScriptRoot 'configure-api.cjs') $paperEnv
+            if ($LASTEXITCODE -ne 0) { Stop-Startup 'LLM API configuration was not saved.' }
+        }
+        Start-ApplicationServices $tools
         Write-Host "`nAll core services are verified:" -ForegroundColor Green; Write-Host "  Frontend:   $($Config.FrontendUrl)"; Write-Host "  D backend:  $($Config.DHealthUrl)"; Write-Host "  A backend:  $($Config.AHealthUrl)"; Write-Host "  Logs:       $LogRoot"
+        if ($RunSmoke) {
+            Write-Step 'Running new-user first-use smoke'
+            & (Join-Path $PSScriptRoot 'new-user-smoke.ps1') -DBase "http://127.0.0.1:$($Config.DPort)" -ABase "http://127.0.0.1:$($Config.APort)"
+            if ($LASTEXITCODE -ne 0) { Stop-Startup 'New-user first-use smoke failed. See messages above.' }
+        }
         if (-not $NoBrowser) { Start-Process $Config.FrontendUrl | Out-Null }
     } else {
         Write-Step 'Checking and preparing the complete environment'; $tools = Ensure-Node; Test-RuntimeData $tools.Node; $tools.Uv = Ensure-Uv; $tools.Docker = Ensure-Docker
         if ($CheckOnly) { Write-Ok 'Basic tool/config/data check completed. Use 检查启动环境.bat for dependency installation and migrations.'; exit 0 }
         Ensure-Dependencies $tools.Npm $tools.Uv; Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv
+        Ensure-SemanticIndex (Join-Path $BackendRoot '.venv\Scripts\python.exe')
         Write-Host "`nEnvironment preparation completed. Use 启动项目.bat to start and verify the application." -ForegroundColor Green
+        Write-Host "Tip: run 启动项目.bat -ConfigureApi once after launch to set the logged-in account's own LLM API." -ForegroundColor Yellow
     }
     exit 0
 } catch {

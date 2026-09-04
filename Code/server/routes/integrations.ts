@@ -64,7 +64,12 @@ integrationsRouter.post('/zotero/connect', async (req: AuthRequest, res: Respons
   ensureProductivitySchema(getDb());
   const libraryId = String(req.body?.library_id || '').trim();
   const apiKey = String(req.body?.api_key || '').trim();
-  if (!/^\d+$/.test(libraryId) || !apiKey) { res.status(400).json({ message: 'Zotero Library ID 和 API Key 均不能为空' }); return; }
+  if (!libraryId) { res.status(400).json({ message: '请填写 Zotero Library ID' }); return; }
+  if (!apiKey) { res.status(400).json({ message: '请填写 Zotero API Key' }); return; }
+  if (!/^\d+$/.test(libraryId)) {
+    res.status(400).json({ message: 'Zotero Library ID 应为数字；请到 Zotero 设置页复制你的 User ID' });
+    return;
+  }
   try {
     const response = await fetch(zoteroUrl(`/users/${encodeURIComponent(libraryId)}/collections?limit=1`), { headers: { 'Zotero-API-Key': apiKey, 'Zotero-API-Version': '3' }, signal: AbortSignal.timeout(12000) });
     if (!response.ok) { res.status(400).json({ message: `Zotero 验证失败（HTTP ${response.status}）` }); return; }

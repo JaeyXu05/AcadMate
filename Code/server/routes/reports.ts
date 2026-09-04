@@ -325,7 +325,7 @@ reportsRouter.get('/preferences', (req: AuthRequest, res: Response) => {
     ensureProductivitySchema(db);
     db.prepare('INSERT OR IGNORE INTO report_preferences (user_id) VALUES (?)').run(req.userId!);
     const row = db.prepare('SELECT * FROM report_preferences WHERE user_id=?').get(req.userId!) as any;
-    res.json({ ...row, daily_enabled: Boolean(row.daily_enabled), weekly_enabled: Boolean(row.weekly_enabled), monthly_enabled: Boolean(row.monthly_enabled), email_enabled: Boolean(row.email_enabled), smtp_configured: smtpConfigured() });
+    res.json({ ...row, daily_enabled: Boolean(row.daily_enabled), weekly_enabled: Boolean(row.weekly_enabled), monthly_enabled: Boolean(row.monthly_enabled), email_enabled: Boolean(row.email_enabled), smtp_configured: smtpConfigured(req.userId!) });
   } catch (err) {
     fail(res, err, '报告设置加载失败');
   }
@@ -370,8 +370,9 @@ reportsRouter.post('/generate', async (req: AuthRequest, res: Response) => {
     const report = await generateReport(req.userId!, period);
     if (req.body?.send_email) {
       const user = getDb().prepare('SELECT email FROM users WHERE id=?').get(req.userId!) as { email: string };
-      queueEmail({ userId: req.userId!, recipient: user.email, subject: report.title, body: report.content_markdown, kind: `report:${period}` });
-      void drainEmailOutbox();
+      const queuedId = queueEmail({ userId: req.userId!, recipient: user.email, subject: report.title, body: report.content_markdown, kind: `report:${period}` });
+      // 与邮件功能一致：用该用户已保存的 SMTP 账号尝试发送，而不是只看全局 .env。
+      await drainEmailOutbox(5, req.userId!, undefined, [queuedId]);
     }
     res.json(mapReport(report, req.userId!));
   } catch (err) {
@@ -432,7 +433,7 @@ reportsRouter.get('/presentations/:id/download', (req: AuthRequest, res: Respons
 
 reportsRouter.get('/outbox', (req: AuthRequest, res: Response) => {
   const rows = getDb().prepare('SELECT id,recipient,subject,kind,status,scheduled_at,sent_at,error,created_at FROM email_outbox WHERE user_id=? ORDER BY id DESC LIMIT 100').all(req.userId!);
-  res.json({ smtp_configured: smtpConfigured(), items: rows });
+  res.json({ smtp_configured: smtpConfigured(req.userId!), items: rows });
 });
 
 let reportSchedulerRunning = false;
@@ -477,11 +478,11 @@ export async function runReportScheduler(): Promise<void> {
       const kind = `report:${period}:${sqlDate(bounds.start).slice(0, 10)}`;
       const queued = db.prepare('SELECT id FROM email_outbox WHERE user_id=? AND kind=?').get(pref.user_id, kind);
       if (!queued) {
-        queueEmail({ userId: pref.user_id, recipient: pref.email, subject: report.title, body: report.content_markdown, kind });
+        const queuedId = queueEmail({ userId: pref.user_id, recipient: pref.email, subject: report.title, body: report.content_markdown, kind });
+        await drainEmailOutbox(5, pref.user_id, undefined, [queuedId]);
       }
     }
     }
-    await drainEmailOutbox();
   } finally {
     reportSchedulerRunning = false;
   }
