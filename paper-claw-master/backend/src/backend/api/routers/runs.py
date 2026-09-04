@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from backend.agents.runner import execute_agent_run
+from backend.agents.runner import cancel_run, execute_agent_run, list_run_events
 from backend.api.deps import get_db_session
 from backend.api.routers.mentor_workflows import (
     MentorWorkflowRuntime,
@@ -19,10 +19,11 @@ from backend.harness.pdf_skill import (
     queue_pdf_analyze,
 )
 from backend.harness.productivity_skill import (
+    execute_plan_coach,
     execute_progress_report,
     productivity_result,
+    queue_plan_coach,
     queue_progress_report,
-    start_plan_coach,
 )
 from backend.harness.research_skill import skill_result, start_direction_explore, start_research_task
 from backend.harness.runtime import suggest_next_skill
@@ -94,7 +95,14 @@ def create_run(
             )
         return created
     if skill_id == "plan_coach":
-        return start_plan_coach(request, session)
+        created = queue_plan_coach(request, session)
+        if created.status == RunStatus.pending.value:
+            background_tasks.add_task(
+                execute_plan_coach,
+                int(created.run_id),
+                request.model_dump(mode="json"),
+            )
+        return created
     raise HTTPException(status_code=400, detail=f"unknown skill_id: {skill_id}")
 
 
@@ -136,3 +144,28 @@ def get_harness_result(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     raise HTTPException(status_code=404, detail=f"unsupported workflow: {run.workflow}")
+
+
+@router.get("/{run_id}/events")
+def get_productivity_events(
+    run_id: int,
+    after_sequence: int | None = None,
+    session: Session = Depends(get_db_session),
+) -> list[dict]:
+    run = session.get(AgentRun, run_id)
+    if run is None or run.workflow not in {WorkflowName.plan_coach.value, WorkflowName.progress_report.value}:
+        raise HTTPException(status_code=404, detail="productivity run not found")
+    return [event.model_dump(mode="json") for event in list_run_events(session, run_id, after_sequence)]
+
+
+@router.post("/{run_id}/cancel", response_model=RunCreated)
+def cancel_productivity_run(
+    run_id: int,
+    session: Session = Depends(get_db_session),
+) -> RunCreated:
+    run = session.get(AgentRun, run_id)
+    if run is None or run.workflow not in {WorkflowName.plan_coach.value, WorkflowName.progress_report.value}:
+        raise HTTPException(status_code=404, detail="productivity run not found")
+    cancel_run(session, run_id)
+    session.commit()
+    return productivity_result(run_id, session, run.workflow, "plan_coach" if run.workflow == WorkflowName.plan_coach.value else "progress_report")

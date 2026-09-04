@@ -54,6 +54,11 @@ export interface RagMentor {
     profile_office?: string;
     profile_graduated_from?: string;
     topics_source?: number;
+    methods_verified?: boolean;
+    paper_identity_verified?: boolean;
+    pending_paper_platforms?: string;
+    topics_extracted_count?: number;
+    topics_truncated?: boolean;
   };
 }
 

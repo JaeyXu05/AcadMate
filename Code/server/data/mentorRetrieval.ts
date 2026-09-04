@@ -1,4 +1,5 @@
 import type { RagEvidence, RagMentor } from './ragAdvisors';
+import { retrievalPolicy } from './retrievalPolicy';
 
 export interface QueryContract {
   rawQuery: string;
@@ -7,6 +8,7 @@ export interface QueryContract {
   expandedTerms: string[];
   excludedGeneralizations: string[];
   semanticBoundary?: string;
+  semanticBoundaries?: string[];
   /** V2 typed concepts are forwarded by A and kept for audit/UI consumers. */
   concepts?: Array<{
     concept_id?: string;
@@ -20,6 +22,12 @@ export interface QueryContract {
   }>;
   logic?: 'AND' | 'OR' | string;
   version?: number;
+  filters?: {
+    departments: string[];
+    mentorNames: string[];
+    recruitmentRequired: boolean;
+    undergraduateFriendly: boolean;
+  };
 }
 
 export interface BoundEvidence {
@@ -65,29 +73,13 @@ interface Boundary {
   parents: string[];
 }
 
-const BOUNDARIES: Boundary[] = [
-  {
-    name: 'generative_ai',
-    triggers: ['生成式人工智能', '生成式ai', 'generative ai', '生成模型', '大语言模型', '大模型', 'llm', '扩散模型', 'diffusion model', 'foundation model'],
-    preserve: ['生成式'],
-    expansions: ['generative ai', '生成模型', '大语言模型', 'llm', '扩散模型', 'diffusion model', '基础模型', 'foundation model'],
-    parents: ['人工智能', 'ai', '机器学习', 'machine learning', '深度学习', '多模态'],
-  },
-  {
-    name: 'recommender_systems',
-    triggers: ['推荐系统', '推荐算法', 'recommender system', 'recommendation system', '协同过滤', 'collaborative filtering', 'ctr预估', '点击率预估'],
-    preserve: ['推荐'],
-    expansions: ['recommender system', 'recommendation system', '推荐算法', '协同过滤', 'collaborative filtering', '排序学习', 'learning to rank', 'ctr预估'],
-    parents: ['人工智能', 'ai', '机器学习', '数据科学', '大数据'],
-  },
-  {
-    name: 'multimodal_generation',
-    triggers: ['多模态生成', 'multimodal generation', '文生图', 'text-to-image', '视觉语言生成'],
-    preserve: ['多模态', '生成'],
-    expansions: ['multimodal generation', '文生图', 'text-to-image', '视觉语言生成', '扩散模型'],
-    parents: ['多模态', 'multimodal', '人工智能', '机器学习'],
-  },
-];
+const BOUNDARIES: Boundary[] = retrievalPolicy.concept_families.map((family) => ({
+  name: family.id,
+  triggers: family.aliases,
+  preserve: family.preserve ?? [],
+  expansions: [...new Set([...(family.aliases ?? []), ...(family.children ?? [])])],
+  parents: family.parents ?? [],
+}));
 
 const GENERIC_PARENTS = [
   '人工智能', 'ai', 'artificial intelligence', '机器学习', 'machine learning',
@@ -103,7 +95,12 @@ const APPLICATION_HINTS = [
 
 export function relevanceThreshold(): number {
   const raw = Number(process.env.MENTOR_RELEVANCE_THRESHOLD);
-  return Number.isFinite(raw) && raw > 0 ? raw : 60;
+  return Number.isFinite(raw) && raw > 0 ? raw : retrievalPolicy.scores.relevance_threshold;
+}
+
+/** D/A 当前共同认可的主题来源：官网 profile 或已核验论文标题受控回填。 */
+export function isTrustedTopicSource(value: unknown): boolean {
+  return [1, 3].includes(Number(value ?? 0));
 }
 
 /** SSE / 推荐页写出前的最后一关：低分、未评估、0 主题重叠不得进入结果数组。 */
@@ -123,19 +120,60 @@ export function keepDisplayableAdvisors<T extends {
 }
 
 export function buildQueryContract(rawQuery: string): QueryContract {
-  const extracted = extractCanonicalQuery(rawQuery);
-  const normalized = normalize(extracted);
-  const boundary = BOUNDARIES.find((item) => item.triggers.some((term) => normalized.includes(normalize(term))));
-  const matched = boundary?.triggers.filter((term) => normalized.includes(normalize(term))) ?? [];
-  const canonicalQuery = matched.sort((left, right) => normalize(right).length - normalize(left).length)[0] || extracted;
-  const preserved = boundary?.preserve.filter((term) => normalize(canonicalQuery).includes(normalize(term))) ?? [];
+  const filters = extractQueryFilters(rawQuery);
+  let semanticQuery = String(rawQuery ?? '');
+  for (const name of filters.mentorNames) {
+    semanticQuery = semanticQuery.replace(new RegExp(`(?:找|查|查看|介绍)\\s*${name}(?:老师|教授|导师|博导)`, 'g'), ' ');
+  }
+  for (const value of filters.departments) semanticQuery = semanticQuery.replace(value, ' ');
+  semanticQuery = semanticQuery
+    .replace(/(?:愿意|正在|可以|能)?(?:招收|招生|招|带).{0,10}(?:本科生|硕士|博士|研究生)/g, ' ')
+    .replace(/^(?:我会|我熟悉|我掌握|掌握|熟悉|会用)[^，,。；;]{1,100}[，,。；;]\s*/i, '')
+    .replace(/\s+/g, ' ').trim()
+    .replace(/^做(?=[一-鿿A-Za-z0-9])/, '');
+  const extracted = semanticQuery ? extractCanonicalQuery(semanticQuery) : '';
+  const explicitOr = /(?:\b(?:or)\b|或者|或)/i.test(extracted);
+  const pieces = extracted.split(/\s*(?:\b(?:and|or)\b|或者|或|和|与|以及|及|、|,|，|;|；|\+|\/)\s*/i).filter(Boolean);
+  const concepts = (pieces.length ? pieces : extracted ? [extracted] : []).map((surface, index) => {
+    let role = 'CORE_TOPIC';
+    let cleaned = surface.trim();
+    if (/^(?:用于|应用于|面向)/i.test(cleaned)) {
+      role = 'APPLICATION_DOMAIN';
+      cleaned = cleaned.replace(/^(?:用于|应用于|面向)\s*/i, '');
+    } else if (/^(?:用|使用|采用|基于|通过)/i.test(cleaned)) {
+      role = 'METHOD';
+      cleaned = cleaned.replace(/^(?:用|使用|采用|基于|通过)\s*/i, '');
+    }
+    const normalized = normalize(cleaned);
+    const boundary = BOUNDARIES.find((item) => item.triggers.some((term) => normalized === normalize(term)));
+    const canonical = retrievalPolicy.concept_families.find((item) => item.id === boundary?.name)?.canonical ?? cleaned;
+    const preserved = boundary?.preserve.filter((term) => normalized.includes(normalize(term))) ?? [];
+    return {
+      concept_id: `query_concept_${index + 1}`,
+      surface: cleaned,
+      canonical,
+      role,
+      required: role === 'CORE_TOPIC',
+      must_preserve: boundary ? (preserved.length ? preserved : [canonical]) : [canonical],
+      confidence: 1,
+      source: 'text',
+      boundary,
+    };
+  });
+  const boundaries = [...new Set(concepts.map((item) => item.boundary?.name).filter((item): item is string => Boolean(item)))];
+  const canonicalQuery = concepts.map((item) => item.canonical).join('；');
   return {
     rawQuery,
     canonicalQuery,
-    mustPreserve: boundary ? (preserved.length ? preserved : [canonicalQuery]) : (canonicalQuery ? [canonicalQuery] : []),
-    expandedTerms: boundary?.expansions ?? [],
-    excludedGeneralizations: boundary?.parents ?? GENERIC_PARENTS,
-    semanticBoundary: boundary?.name,
+    mustPreserve: [...new Set(concepts.flatMap((item) => item.must_preserve ?? []))],
+    expandedTerms: [...new Set(concepts.flatMap((item) => item.boundary?.expansions ?? []))],
+    excludedGeneralizations: [...new Set(concepts.flatMap((item) => item.boundary?.parents ?? GENERIC_PARENTS))],
+    semanticBoundary: concepts.length > 1 ? 'multi_concept' : concepts[0]?.boundary?.name,
+    semanticBoundaries: boundaries,
+    concepts: concepts.map(({ boundary: _boundary, ...item }) => item),
+    logic: explicitOr ? 'OR' : concepts.filter((item) => item.required).length > 1 ? 'AND' : 'OR',
+    version: retrievalPolicy.version,
+    filters,
   };
 }
 
@@ -151,6 +189,17 @@ export function retrieveQualifiedMentors(
   const scoreFloor = options.personalize ? threshold : relevanceThreshold();
   const matches: MentorMatch[] = [];
   for (const candidate of candidates) {
+    if (!matchesQueryFilters(query, candidate)) continue;
+    const nameMatch = query.filters?.mentorNames.some((name) => normalize(name) === normalize(candidate.mentor_name));
+    if (nameMatch && !query.canonicalQuery) {
+      const evidence = bindEvidence(query, candidate, evidenceFor(candidate.candidate_id), 'DIRECT');
+      matches.push({
+        candidate, finalScore: 100, matchType: 'DIRECT',
+        scoreBreakdown: { eligibility_score: 100, ranking_score: 100, displayed_topic_score: 100, topic_match: 100 },
+        evidence, matchedTerms: [candidate.mentor_name], fallback,
+      });
+      continue;
+    }
     const assessed = assessCandidate(query, candidate, fallback, scoreFloor);
     if (assessed.finalScore < threshold || !['DIRECT', 'ADJACENT'].includes(assessed.matchType)) continue;
     const evidence = bindEvidence(query, candidate, evidenceFor(candidate.candidate_id), assessed.matchType);
@@ -184,9 +233,10 @@ export function reviewMatches(query: QueryContract, matches: MentorMatch[]): Rev
     };
   }
   const failed: string[] = [];
+  const nameOnly = Boolean(query.filters?.mentorNames.length && !query.canonicalQuery);
   for (const match of matches) {
     if (match.matchType === 'UNRELATED' as string) failed.push(`unrelated:${match.candidate.candidate_id}`);
-    if (!match.evidence.some((item) => item.support_type === 'DIRECT' || item.support_type === 'ADJACENT')) {
+    if (!nameOnly && !match.evidence.some((item) => item.support_type === 'DIRECT' || item.support_type === 'ADJACENT')) {
       failed.push(`missing_query_evidence:${match.candidate.candidate_id}`);
     }
     if (publicationContradiction(match.candidate, match.evidence)) {
@@ -210,34 +260,50 @@ export function reviewMatches(query: QueryContract, matches: MentorMatch[]): Rev
 }
 
 function assessCandidate(query: QueryContract, candidate: RagMentor, fallback: boolean, scoreFloor = relevanceThreshold()) {
-  const boundary = BOUNDARIES.find((item) => item.name === query.semanticBoundary);
   const topics = (candidate.research_topics ?? []).map(normalize);
-  const methods = (candidate.methods ?? []).map(normalize);
-  const topicAssessment = boundary
-    ? boundaryScore(query.canonicalQuery, topics, boundary)
-    : overlapAssessment(query, topics);
-  const methodAssessment = boundary
-    ? boundaryScore(query.canonicalQuery, methods, boundary)
-    : overlapAssessment(query, methods);
-  const officialTopics = Number(candidate.source_metadata?.topics_source ?? 0) === 1;
-  let topicScore = topicAssessment.score * (officialTopics ? 1 : 0.45);
-  let matchType = topicAssessment.type;
+  const methodsVerified = candidate.source_metadata?.methods_verified === true;
+  const methods = methodsVerified ? (candidate.methods ?? []).map(normalize) : [];
+  const concepts = query.concepts?.length ? query.concepts : [{ canonical: query.canonicalQuery, role: 'CORE_TOPIC', required: true }];
+  const assessments = concepts.map((concept) => {
+    const canonical = String(concept.canonical ?? concept.surface ?? '');
+    const boundary = BOUNDARIES.find((item) => item.triggers.some((term) => normalize(term) === normalize(canonical)));
+    const values = concept.role === 'METHOD' ? methods : topics;
+    const singleQuery: QueryContract = { ...query, canonicalQuery: canonical, concepts: [concept] };
+    const assessed = boundary ? boundaryScore(canonical, values, boundary) : overlapAssessment(singleQuery, values);
+    return { concept, assessed };
+  });
+  const required = assessments.filter((item) => item.concept.required !== false);
+  const considered = required.length ? required : assessments;
+  const chosen = query.logic === 'AND'
+    ? considered.reduce((left, right) => left.assessed.score <= right.assessed.score ? left : right)
+    : considered.reduce((left, right) => left.assessed.score >= right.assessed.score ? left : right);
+  const allQualifying = query.logic === 'AND'
+    ? considered.every((item) => item.assessed.type === 'DIRECT' || item.assessed.type === 'ADJACENT')
+    : considered.some((item) => item.assessed.type === 'DIRECT' || item.assessed.type === 'ADJACENT');
+  const trustedTopics = isTrustedTopicSource(candidate.source_metadata?.topics_source);
+  const methodOnly = considered.every((item) => item.concept.role === 'METHOD');
+  const trustedChannel = methodOnly ? methodsVerified : trustedTopics;
+  let topicScore = chosen.assessed.score * (trustedChannel ? 1 : retrievalPolicy.scores.untrusted_topic_factor);
+  let matchType = allQualifying ? chosen.assessed.type : 'UNRELATED';
   if (methodApplicationVeto(query, topics, matchType)) {
     topicScore = 0;
     matchType = 'UNRELATED';
   }
-  const fallbackFactor = fallback ? 0.82 : 1;
-  const finalScore = round(topicScore * 0.92 * fallbackFactor);
+  const fallbackFactor = fallback ? retrievalPolicy.scores.fallback_factor : 1;
+  const finalScore = round(topicScore * retrievalPolicy.scores.topic_calibration * fallbackFactor);
   if (finalScore < scoreFloor) matchType = matchType === 'DIRECT' || matchType === 'ADJACENT' ? 'UNRELATED' : matchType;
   return {
     finalScore,
     matchType,
-    matchedTerms: [...new Set([...topicAssessment.matched, ...methodAssessment.matched])],
+    matchedTerms: [...new Set(assessments.flatMap((item) => item.assessed.matched))],
     scoreBreakdown: {
+      eligibility_score: finalScore,
+      ranking_score: finalScore,
+      displayed_topic_score: round(Math.max(0, ...assessments.filter((item) => item.concept.role !== 'METHOD').map((item) => item.assessed.score))),
       topic_match: round(topicScore),
-      method_match: 0,
+      method_match: round(Math.max(0, ...assessments.filter((item) => item.concept.role === 'METHOD').map((item) => item.assessed.score))),
       publication_support: 0,
-      evidence_confidence: officialTopics ? 95 : 45,
+      evidence_confidence: trustedChannel ? 95 : 45,
       fallback_factor: fallbackFactor,
     },
   };
@@ -246,7 +312,7 @@ function assessCandidate(query: QueryContract, candidate: RagMentor, fallback: b
 function methodApplicationVeto(query: QueryContract, topics: string[], matchType: string): boolean {
   const queryBlob = normalize(`${query.canonicalQuery} ${query.rawQuery}`);
   const topicBlob = topics.join(' ');
-  const queryIsMethod = Boolean(query.semanticBoundary);
+  const queryIsMethod = Boolean(query.concepts?.some((concept) => concept.role === 'METHOD'));
   const candidateApp = APPLICATION_HINTS.some((hint) => topicBlob.includes(normalize(hint)));
   const queryApp = APPLICATION_HINTS.some((hint) => queryBlob.includes(normalize(hint)));
   if (queryIsMethod && matchType === 'UNRELATED' && candidateApp) return true;
@@ -254,6 +320,31 @@ function methodApplicationVeto(query: QueryContract, topics: string[], matchType
   if (queryApp && queryIsMethod === false) return false;
   if (queryIsMethod && !queryApp && candidateApp && matchType !== 'DIRECT' && matchType !== 'ADJACENT') return true;
   return false;
+}
+
+function extractQueryFilters(rawQuery: string): NonNullable<QueryContract['filters']> {
+  const departments = [...String(rawQuery ?? '').matchAll(/([一-鿿A-Za-z0-9·\-]{2,30}(?:学院|系(?!统)|研究院|实验室))/g)]
+    .map((match) => match[1].replace(/^(?:找|在|来自)/, ''));
+  const mentorNames = [...String(rawQuery ?? '').matchAll(/(?:找|查|查看|介绍)\s*([一-鿿]{2,3})(?:老师|教授|导师|博导)/g)]
+    .map((match) => match[1]);
+  return {
+    departments: [...new Set(departments)],
+    mentorNames: [...new Set(mentorNames)],
+    recruitmentRequired: /(?:愿意|正在|可以|能)?(?:招收|招生|招|带).{0,8}(?:本科生|硕士|博士|研究生)/.test(rawQuery),
+    undergraduateFriendly: /(?:愿意|可以|能|招|带).{0,8}本科生/.test(rawQuery),
+  };
+}
+
+function matchesQueryFilters(query: QueryContract, candidate: RagMentor): boolean {
+  const filters = query.filters;
+  if (!filters) return true;
+  if (filters.mentorNames.length && !filters.mentorNames.some((name) => normalize(name) === normalize(candidate.mentor_name))) return false;
+  const department = normalize(candidate.department ?? '');
+  if (filters.departments.length && !filters.departments.some((value) => department.includes(normalize(value)) || normalize(value).includes(department))) return false;
+  const recruitment = String(candidate.recruitment_status ?? '');
+  if (filters.recruitmentRequired && !recruitment) return false;
+  if (filters.undergraduateFriendly && !recruitment.includes('本科')) return false;
+  return true;
 }
 
 function bindEvidence(
@@ -338,6 +429,14 @@ function boundaryScore(canonical: string, values: string[], boundary: Boundary) 
     const term = expansions.find((item) => item && (value === item || value.includes(item)));
     if (term) return { score: 82, type: 'ADJACENT', matched: [term] };
   }
+  const preserved = boundary.preserve.map(normalize).filter(Boolean);
+  if (preserved.length >= 2) {
+    for (const value of values) {
+      if (preserved.every((term) => value.includes(term))) {
+        return { score: retrievalPolicy.scores.adjacent_relation, type: 'ADJACENT', matched: preserved };
+      }
+    }
+  }
   return { score: 0, type: 'UNRELATED', matched: [] as string[] };
 }
 
@@ -402,7 +501,7 @@ export function sessionInterestTerms(rawQueries: string[]): string[] {
 
 function extractCanonicalQuery(raw: string): string {
   let text = String(raw ?? '').replace(/\s+/g, ' ').trim().replace(/[。.!！?？,，]+$/g, '');
-  text = text.replace(/^(?:请(?:问|帮我)?|麻烦|帮我)?(?:想要?)?(?:找(?:一下)?|搜索|检索)(?:一下)?(?:做|研究)?/i, '');
+  text = text.replace(/^(?:请(?:问|帮我)?|麻烦|帮我)?\s*(?:想要?)?\s*(?:找(?:一下)?|搜索|检索)\s*(?:一下)?\s*(?:做|研究)?\s*/i, '');
   text = text.replace(/(?:方向)?(?:的)?(?:导师|老师|教授|博导)s?$/i, '');
   return text.trim() || String(raw ?? '').trim();
 }

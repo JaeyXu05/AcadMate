@@ -19,9 +19,19 @@ class SharedContext(BaseModel):
     task_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
     report_period: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
+    current_time: str | None = None
+    timezone: str | None = None
     progress_events: list[dict[str, Any]] = Field(default_factory=list)
     chat_summary: list[dict[str, Any]] = Field(default_factory=list)
     plans: list[dict[str, Any]] = Field(default_factory=list)
+    # A compact, user-scoped summary assembled by the application boundary.
+    # It deliberately contains only selected historical evidence, never raw
+    # conversations or provider credentials.
+    personal_harness_summary: dict[str, Any] = Field(default_factory=dict)
+    input_fingerprint: str | None = None
+    input_audit: dict[str, Any] = Field(default_factory=dict)
 
 
 class RunCreate(BaseModel):

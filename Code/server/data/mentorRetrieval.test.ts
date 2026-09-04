@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { buildQueryContract, keepDisplayableAdvisors, longTermInterestTerms, retrieveQualifiedMentors, reviewMatches } from './mentorRetrieval';
 import { ragStore } from './ragAdvisors';
 import type { RagEvidence, RagMentor } from './ragAdvisors';
@@ -21,11 +22,14 @@ function evidence(id: string): RagEvidence[] {
     {
       evidence_id: `${id}:identity`, candidate_id: id,
       source_type: 'ustc_official_faculty_directory', source_uri: 'https://ustc.example/directory',
+      title: `${id} identity`, extracted_fact: `${id} is a USTC mentor`, locator: 'directory', confidence: 0.99,
       metadata: { identity_verified: true, supports_fields: 'affiliation,department' },
     },
     {
       evidence_id: `${id}:profile`, candidate_id: id,
       source_type: 'ustc_official_faculty_profile', source_uri: `https://ustc.example/${id}`,
+      title: `${id} profile`, extracted_fact: `${id} research topics: 生成式人工智能 大语言模型 推荐系统 协同过滤`,
+      locator: 'research topics', confidence: 0.98,
       metadata: { identity_verified: true, supports_fields: 'research_topics' },
     },
   ];
@@ -35,6 +39,26 @@ test('query contract preserves recommendation and generative qualifiers', () => 
   assert.equal(buildQueryContract('推荐系统').canonicalQuery, '推荐系统');
   assert.deepEqual(buildQueryContract('推荐系统').mustPreserve, ['推荐']);
   assert.deepEqual(buildQueryContract('生成式人工智能').mustPreserve, ['生成式']);
+});
+
+test('shared v3 contract preserves OR and exposes all registered families', () => {
+  const orContract = buildQueryContract('推荐系统或信息检索');
+  assert.equal(orContract.logic, 'OR');
+  assert.equal(orContract.version, 3);
+  const graphAndRec = buildQueryContract('图神经网络和推荐系统');
+  assert.equal(graphAndRec.logic, 'AND');
+  assert.deepEqual(new Set(graphAndRec.semanticBoundaries), new Set(['graph_learning', 'recommender_systems']));
+});
+
+test('query contract separates department, recruitment and mentor-name filters', () => {
+  const structured = buildQueryContract('找网络空间安全学院做大模型、愿意招本科生的老师');
+  assert.deepEqual(structured.filters?.departments, ['网络空间安全学院']);
+  assert.equal(structured.filters?.undergraduateFriendly, true);
+  assert.equal(structured.canonicalQuery, '大模型');
+  assert.equal(structured.canonicalQuery.includes('本科生'), false);
+  const named = buildQueryContract('找张凯老师');
+  assert.deepEqual(named.filters?.mentorNames, ['张凯']);
+  assert.equal(named.canonicalQuery, '');
 });
 
 test('natural-language wrapper does not become part of the canonical topic', () => {
@@ -181,5 +205,29 @@ test('personalized retrieval does not remap adjacent matches below search-page 6
   assert.ok(search.matches.length >= 1);
   assert.ok(personalized.matches.length >= 1);
   assert.equal(personalized.matches[0].matchType === 'DIRECT' || personalized.matches[0].matchType === 'ADJACENT', true);
+});
+
+test('D fallback passes the same evidence-anchored truth set as A', () => {
+  const spec = JSON.parse(readFileSync(new URL('../../../paper-claw-master/eval/mentor_queries.json', import.meta.url), 'utf8')) as {
+    queries: Array<{
+      id: string; query: string; relevant_candidate_ids?: string[];
+      forbidden_candidate_ids?: string[]; max_results?: number; forbid_untrusted_results?: boolean;
+    }>;
+  };
+  const candidates = ragStore.getCandidates();
+  for (const item of spec.queries) {
+    const result = retrieveQualifiedMentors(item.query, candidates, (id) => ragStore.getEvidenceFor(id), { limit: 5 });
+    const ids = new Set(result.matches.map((match) => match.candidate.candidate_id));
+    if (item.relevant_candidate_ids?.length) {
+      assert.ok(item.relevant_candidate_ids.some((id) => ids.has(id)), `${item.id}: missing anchored positive`);
+    }
+    for (const forbidden of item.forbidden_candidate_ids ?? []) {
+      assert.equal(ids.has(forbidden), false, `${item.id}: returned forbidden candidate ${forbidden}`);
+    }
+    if (item.max_results !== undefined) assert.ok(result.matches.length <= item.max_results, item.id);
+    if (item.forbid_untrusted_results) {
+      assert.equal(result.matches.some((match) => ![1, 3].includes(Number(match.candidate.source_metadata?.topics_source ?? 0))), false, item.id);
+    }
+  }
 });
 

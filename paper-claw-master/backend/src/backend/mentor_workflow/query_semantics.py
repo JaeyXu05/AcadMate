@@ -8,7 +8,6 @@ undifferentiated expansion keyword list.
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from typing import Iterable
 
@@ -22,17 +21,19 @@ from backend.mentor_workflow.concept_relations import (
     extract_query_concepts,
     family_for,
     preserved_tokens,
+    query_logic,
 )
-from backend.mentor_workflow.schemas import CandidateMentor, QueryConcept, QueryContract
+from backend.mentor_workflow.retrieval_policy import policy_score, policy_version
+from backend.mentor_workflow.schemas import (
+    CandidateMentor,
+    QueryConcept,
+    QueryConceptRole,
+    QueryContract,
+)
 
 
 def relevance_threshold() -> float:
-    raw = os.environ.get("MENTOR_RELEVANCE_THRESHOLD", "60")
-    try:
-        value = float(raw)
-    except ValueError:
-        return 60.0
-    return value if value > 0 else 60.0
+    return policy_score("relevance_threshold")
 
 
 def build_query_contract(
@@ -40,6 +41,8 @@ def build_query_contract(
     topics: list[str] | None = None,
     methods: list[str] | None = None,
     applications: list[str] | None = None,
+    *,
+    semantic_query: str | None = None,
 ) -> QueryContract:
     """Build a lossless, multi-concept contract.
 
@@ -49,16 +52,17 @@ def build_query_contract(
     """
 
     raw = str(raw_query or "")
+    semantic = str(semantic_query if semantic_query is not None else raw)
     topic_values = list(topics or [])
     method_values = list(methods or [])
     application_values = list(applications or [])
     concepts = extract_query_concepts(
-        raw,
+        semantic,
         topic_values,
         method_values,
         application_values,
     )
-    canonical = "；".join(concept.canonical for concept in concepts) if concepts else clean_query_text(raw)
+    canonical = "；".join(concept.canonical for concept in concepts) if concepts else clean_query_text(semantic)
     boundary = None
     if len(concepts) == 1:
         family = family_for(concepts[0].canonical)
@@ -67,6 +71,7 @@ def build_query_contract(
         boundary = "multi_concept"
     return QueryContract(
         raw_query=raw,
+        semantic_query=semantic,
         canonical_query=canonical,
         must_preserve=_unique(
             token for concept in concepts for token in concept.must_preserve
@@ -74,8 +79,14 @@ def build_query_contract(
         expanded_terms=expanded_terms_for(concepts),
         excluded_generalizations=excluded_generalizations_for(concepts),
         semantic_boundary=boundary,
+        semantic_boundaries=_unique(
+            family.concept_id
+            for concept in concepts
+            if (family := family_for(concept.canonical)) is not None
+        ),
         concepts=concepts,
-        logic="AND" if len([item for item in concepts if item.required]) > 1 else "OR",
+        logic=query_logic(semantic, concepts),
+        version=policy_version(),
     )
 
 
@@ -89,7 +100,8 @@ def candidate_relevance(
 
     concepts = contract.concepts or _compat_concepts(contract)
     topics = list(candidate.research_topics or [])
-    methods = list(candidate.methods or [])
+    methods_verified = candidate.source_metadata.get("methods_verified") is True
+    methods = list(candidate.methods or []) if methods_verified else []
     per_concept = [
         (
             concept,
@@ -114,9 +126,12 @@ def candidate_relevance(
         relation_score = strongest[1].score
         all_qualifying = strongest[1].relation in QUALIFYING_RELATIONS
 
-    official_topics = int(candidate.source_metadata.get("topics_source") or 0) == 1
-    topic_score = relation_score if official_topics else relation_score * 0.45
-    final_score = topic_score * 0.92 * (0.82 if fallback else 1.0)
+    trusted_topics = int(candidate.source_metadata.get("topics_source") or 0) in {1, 3}
+    has_required_method = any(concept.role == QueryConceptRole.method for concept, _ in required)
+    trusted_channel = methods_verified if has_required_method else trusted_topics
+    eligibility_score = relation_score if trusted_channel else relation_score * policy_score("untrusted_topic_factor")
+    fallback_factor = policy_score("fallback_factor") if fallback else 1.0
+    final_score = eligibility_score * policy_score("topic_calibration") * fallback_factor
     final_score = round(max(0.0, min(100.0, final_score)), 2)
 
     relations = [item[1].relation for item in required]
@@ -130,14 +145,27 @@ def candidate_relevance(
         match_type = "UNRELATED"
 
     matched = sum(item[1].relation in QUALIFYING_RELATIONS for item in required)
+    topic_relations = [
+        judgement.score
+        for concept, judgement in required
+        if concept.role == QueryConceptRole.core_topic
+    ]
+    method_relations = [
+        judgement.score
+        for concept, judgement in required
+        if concept.role == QueryConceptRole.method
+    ]
     breakdown = {
-        "topic_match": round(topic_score, 2),
-        "method_match": 0.0,
+        "eligibility_score": round(final_score, 2),
+        "ranking_score": round(final_score, 2),
+        "displayed_topic_score": round(max(topic_relations, default=0.0), 2),
+        "topic_match": round(max(topic_relations, default=eligibility_score), 2),
+        "method_match": round(max(method_relations, default=0.0), 2),
         "publication_support": 0.0,
         "concept_coverage": round(matched / max(len(required), 1) * 100, 2),
         "relation_score": round(relation_score, 2),
-        "evidence_confidence": 95.0 if official_topics else 45.0,
-        "fallback_factor": 0.82 if fallback else 1.0,
+        "evidence_confidence": 95.0 if trusted_channel else 45.0,
+        "fallback_factor": fallback_factor,
     }
     return final_score, match_type, breakdown
 
@@ -150,9 +178,17 @@ def evidence_query_relevant(contract: QueryContract, title: str, fact: str) -> b
     """Check evidence text without treating it as a new query expansion."""
 
     blob = f"{title} {fact}"
+    normalized_blob = " ".join(blob.casefold().split())
     concepts = contract.concepts or _compat_concepts(contract)
     return any(
         best_relation(concept, [blob]).relation in QUALIFYING_RELATIONS
+        or (
+            (family := family_for(concept.canonical)) is not None
+            and any(
+                " ".join(alias.casefold().split()) in normalized_blob
+                for alias in family.aliases
+            )
+        )
         for concept in concepts
     )
 
@@ -194,7 +230,7 @@ def _empty_breakdown(fallback: bool) -> dict[str, float]:
         "concept_coverage": 0.0,
         "relation_score": 0.0,
         "evidence_confidence": 0.0,
-        "fallback_factor": 0.82 if fallback else 1.0,
+        "fallback_factor": policy_score("fallback_factor") if fallback else 1.0,
     }
 
 

@@ -59,10 +59,14 @@ class MatchingAgent:
             )
             if not qualifies(topic_match, match_type):
                 continue
-            inferred_topic = int(candidate.source_metadata.get("topics_source") or 0) != 1
+            inferred_topic = int(candidate.source_metadata.get("topics_source") or 0) not in {1, 3}
+            methods_verified = candidate.source_metadata.get("methods_verified") is True
             dimensions = MatchDimensionScores(
                 research_topic_match=topic_match,
-                method_match=_overlap_score(intent.methods, candidate.methods),
+                method_match=(
+                    _overlap_score(intent.methods, candidate.methods)
+                    if methods_verified else 0.0
+                ),
                 application_match=_overlap_score(
                     intent.application_domains,
                     [*candidate.research_topics, *candidate.methods],
@@ -99,6 +103,22 @@ class MatchingAgent:
                 risks.append(
                     "Recruitment status is not verified and must not be assumed."
                 )
+            ranking_components: list[tuple[float, float]] = [(topic_match, 0.85)]
+            if intent.methods and methods_verified:
+                ranking_components.append((dimensions.method_match, 0.10))
+            if intent.application_domains:
+                ranking_components.append((dimensions.application_match, 0.05))
+            ranking_weight = sum(weight for _, weight in ranking_components)
+            ranking_score = round(
+                sum(value * weight for value, weight in ranking_components) / ranking_weight,
+                2,
+            )
+            score_breakdown = {
+                **score_breakdown,
+                "eligibility_score": topic_match,
+                "ranking_score": ranking_score,
+                "displayed_topic_score": score_breakdown.get("displayed_topic_score", topic_match),
+            }
             provisional.append(
                 MatchResult(
                     candidate_id=candidate.candidate_id,
@@ -125,7 +145,11 @@ class MatchingAgent:
                 )
             )
         ranked = sorted(
-            provisional, key=lambda item: (-item.total_score, item.candidate_id)
+            provisional,
+            key=lambda item: (
+                -item.score_breakdown.get("ranking_score", item.total_score),
+                item.candidate_id,
+            ),
         )
         return [
             item.model_copy(update={"ranking_position": index})

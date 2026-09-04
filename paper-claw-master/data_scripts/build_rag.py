@@ -41,6 +41,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAW = REPO_ROOT / "data" / "ustc_mentors_raw.json"
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "ustc_mentor_rag.json"
+DEFAULT_MANUAL_OVERRIDES = REPO_ROOT / "data" / "manual_overrides.json"
 DEFAULT_PAPER_SOURCES = {
     "openalex": REPO_ROOT / "data" / "ustc_mentor_papers.json",
     "s2": REPO_ROOT / "data" / "ustc_mentor_papers_s2.json",
@@ -68,10 +69,27 @@ def _author_key(value: str) -> str:
     return re.sub(r"[^a-z0-9一-鿿]", "", value.casefold())
 
 
-def _paper_methods(title: str) -> list[str]:
-    """从论文标题命中常见方法关键词；保守做法，不做推断。"""
-    text = (title or "").casefold()
-    return [m for m in _METHOD_KEYWORDS if m in text]
+def _keyword_in_title(keyword: str, title: str) -> bool:
+    """Boundary-aware bilingual phrase matching (``soc`` must not match social)."""
+    folded = (title or "").casefold()
+    term = keyword.casefold().strip()
+    if not term:
+        return False
+    if re.search(r"[a-z0-9]", term):
+        pattern = re.escape(term).replace(r"\ ", r"[\s\-]+")
+        if term in {"electrochemi", "cryptograph", "metallurg"}:
+            return re.search(rf"(?<![a-z0-9]){pattern}[a-z]*(?![a-z0-9])", folded) is not None
+        return re.search(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", folded) is not None
+    return term in folded
+
+
+def _paper_methods(titles: list[str]) -> list[str]:
+    """Only keep a method supported by at least two distinct verified papers."""
+    hits = {
+        method: sum(_keyword_in_title(method, title) for title in titles)
+        for method in _METHOD_KEYWORDS
+    }
+    return [method for method in _METHOD_KEYWORDS if hits[method] >= 2]
 
 
 # 论文标题 → 研究方向标签 的保守词典（中英双语子串命中）。
@@ -168,11 +186,19 @@ def _paper_topics_from_titles(titles: list[str]) -> list[str]:
     只在 titles 非空时调用，且调用方仅在该导师 research_topics 为空时才回填，
     因此它绝不会覆盖官网已抓到的研究方向。
     """
-    blob = " ".join(titles).casefold()
     hit: list[str] = []
     seen: set[str] = set()
+    one_paper_ok = {
+        "reinforcement learning", "computer vision", "natural language processing",
+        "large language model", "graph neural", "diffusion model", "bioinformatics",
+        "knowledge graph", "recommender", "federated learning", "signal processing",
+        "cloud computing", "high performance computing", "computer architecture",
+        "signal integrity", "soc",
+    }
     for keyword, label in _PAPER_TOPIC_LEXICON:
-        if keyword in blob and label not in seen:
+        support = sum(_keyword_in_title(keyword, title) for title in titles)
+        minimum = 1 if keyword in one_paper_ok else 2
+        if support >= minimum and label not in seen:
             seen.add(label)
             hit.append(label)
     return hit[:6]
@@ -225,6 +251,21 @@ _BIO_NOISE_LINES = {
     "招生信息", "导航", "登录", "English", "教师个人主页",
     "查看更多", "暂无内容", "网站访问量",
 }
+_BIO_NAVIGATION_LINES = {
+    "研究领域", "研究方向", "论文成果", "论文发表", "论文发表", "论文列表",
+    "代表性论文", "专利", "科研项目", "教学资源", "学生信息", "我的相册",
+    "教师博客", "其他栏目", "语种", "语言选择", "基本信息", "个人信息",
+    "联系方式", "其他联系方式", "社会兼职", "学术交流情况", "研究团队",
+    "研究论文", "科研项目", "教育经历", "工作经历", "招聘信息", "招生招聘",
+    "科研队伍", "科研进展", "文章发表", "组内相册", "中文主页", "研究组快讯",
+    "新闻动态", "团队风采",
+    "暑期学校", "招生要求", "教学案例", "出版书籍", "企业咨询",
+    "Home", "Research", "Publications", "Activities",
+}
+_BIO_SECTION_BOUNDARIES = {"教育经历", "工作经历", "社会兼职", "学术兼职"}
+_BIO_ENGLISH_SECTION_BOUNDARIES = (
+    "education background", "work experience", "social affiliations", "academic affiliations",
+)
 _BIO_NOISE_SUBSTRINGS = (
     "扫描手机二维码", "手机扫描二维码", "即可访问本教师主页", "欢迎您的访问",
     "您是第", "位访客", "开通时间", "访问量", "手机版",
@@ -246,9 +287,26 @@ def _extract_bio(profile_text: str, name: str, max_len: int = 600) -> str | None
         line = " ".join(raw_line.split()).strip()
         if not line:
             continue
+        # 履历、任职与社会兼职不是导师简介；在第一个结构化章节前截断，
+        # 防止简介被大段简历和站点栏目淹没。
+        compact = re.sub(r"[\s|]+", "", line).casefold()
+        if line in _BIO_SECTION_BOUNDARIES or any(
+            phrase in compact for phrase in _BIO_ENGLISH_SECTION_BOUNDARIES
+        ):
+            break
         if _is_boilerplate_topic(line):
             continue
-        if line in _BIO_NOISE_LINES:
+        if line in _BIO_NOISE_LINES or line in _BIO_NAVIGATION_LINES:
+            continue
+        if compact in {re.sub(r"[\s|]+", "", item).casefold() for item in _BIO_NAVIGATION_LINES}:
+            continue
+        if any(
+            marker in compact
+            for marker in (
+                "personalinformation", "othercontactinformation", "researchfocus",
+                "同专业博导", "同专业硕导", "researchteam", "researchnews",
+            )
+        ):
             continue
         if any(marker in line for marker in _BIO_NOISE_SUBSTRINGS):
             continue
@@ -257,6 +315,16 @@ def _extract_bio(profile_text: str, name: str, max_len: int = 600) -> str | None
             continue
         # 同专业博导/硕导的英文占位「P同专业博导」「M同专业硕导」。
         if re.fullmatch(r"[PM]同专业[博硕]导", line):
+            continue
+        if line == name or re.fullmatch(rf"{re.escape(name)}\s*\([^)]{{1,20}}\)", line):
+            continue
+        if re.fullmatch(r"(?:博士生导师|硕士生导师|教授|副教授|研究员|副研究员|特任教授)", line):
+            continue
+        if line in {"|", ">", ">>"}:
+            continue
+        if re.fullmatch(r"-?\s*(?:19|20)\d{2}[./-]\d{1,2}(?:[./-]\d{1,2})?", line):
+            continue
+        if line.startswith(("○ 热烈欢迎", "○ 诚挚欢迎", "○ 热烈祝贺", "恭喜")):
             continue
         # 「标签:值」键值行跳过（邮箱哈希/办公地点等）与未知标签。
         if re.match(r"^[^：:]{1,10}[:：]", line):
@@ -296,6 +364,36 @@ _METHOD_KEYWORDS = [
     "transformer", "graph neural", "convolutional", "diffusion model",
     "large language model", "contrastive learning", "self-supervised",
 ]
+_OFFICIAL_METHOD_LEXICON = [
+    ("强化学习", "强化学习"),
+    ("reinforcement learning", "reinforcement learning"),
+    ("图神经网络", "图神经网络"),
+    ("graph neural network", "graph neural network"),
+    ("gnn", "graph neural network"),
+    ("深度学习", "深度学习"),
+    ("deep learning", "deep learning"),
+    ("机器学习", "机器学习"),
+    ("machine learning", "machine learning"),
+    ("神经网络", "神经网络"),
+    ("neural network", "neural network"),
+    ("transformer", "Transformer"),
+    ("扩散模型", "扩散模型"),
+    ("diffusion model", "diffusion model"),
+    ("大语言模型", "大语言模型"),
+    ("large language model", "large language model"),
+    ("对比学习", "对比学习"),
+    ("contrastive learning", "contrastive learning"),
+    ("自监督", "自监督学习"),
+    ("self-supervised", "self-supervised learning"),
+]
+
+
+def _official_methods_from_topics(topics: list[str]) -> list[str]:
+    methods: list[str] = []
+    for keyword, label in _OFFICIAL_METHOD_LEXICON:
+        if any(_keyword_in_title(keyword, topic) for topic in topics):
+            methods.append(label)
+    return _dedupe(methods)
 
 # 与 ustc_scraper._BOILERPLATE_TOPIC_MARKERS 同源：build 时对已抓取的
 # research_topics 再做一次清理，即使跳过重抓也能去掉模板残留污染。
@@ -333,6 +431,44 @@ _BOILERPLATE_TOPIC_MARKERS = (
 _BOILERPLATE_TOPIC_EXACT = {"more", "gallery", "news", "vacancy"}
 _POSTAL_CODE_TOPIC = re.compile(r"(?:邮\s*编|邮政编码).{0,12}\d{5,6}|^\d{6}$")
 
+# 官网个人主页的栏目导航、访问计数和论文列表有时会被抓取器误当成研究方向。
+# 这些规则只排除可明确判定为页面结构/引文碎片的内容；正常的中英文研究表述保留。
+_NAVIGATION_TOPIC_EXACT = {
+    "登录", "首页", "研究方向", "研究领域", "科研进展", "教学资源", "团队风采",
+    "新闻动态", "组内相册", "其他栏目", "招生招聘", "招生信息", "论文成果",
+    "论文发表", "论文发表", "代表性论文", "代表性成果", "科研项目", "项目成果",
+    "学生信息", "我的相册", "教师博客", "个人主页", "基本信息", "联系方式",
+    "教育经历", "工作经历", "社会兼职", "语种", "语言选择", "中文主页",
+    "总访问量", "日访问量", "网站访问量", "访问量", "浏览量", "团队成员",
+}
+_NAVIGATION_TOPIC_MARKERS = (
+    "总访问量", "日访问量", "网站访问量", "您是第", "扫描手机二维码",
+    "欢迎访问", "点击查看", "在线阅读链接", "http://", "https://",
+)
+_BIBLIOGRAPHY_TOPIC_MARKERS = (
+    "et al", "doi", "vol.", "pp.", "paper no.", "journal of ",
+    "adv. mater", "angew.", "sci adv", "nat ", "pnas", "ultramicroscopy",
+)
+_BIBLIOGRAPHY_TOPIC_RE = re.compile(
+    r"\b(?:J\s*(?:Am|Phys|Chem)|Nat(?:ure)?\b|Angew(?:andte)?\b|"
+    r"Adv(?:anced)?\b|Sci\s+Adv\b|PNAS\b|Macromolecules\b|Ultramicroscopy\b)",
+    re.IGNORECASE,
+)
+_DATE_ONLY_TOPIC = re.compile(r"(?:(?:19|20)\d{2}(?:[-./]\d{1,2}){0,2}|\d{1,2}[-./]\d{1,2})$")
+_BIBLIOGRAPHY_YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
+_LATIN_NAME_FRAGMENT = re.compile(r"^[A-Z][a-z]{1,20}$")
+_BIBLIOGRAPHY_IDENTIFIER = re.compile(r"^(?:e\d{4,}|\d{4,})$", re.IGNORECASE)
+_ROLE_OR_ADMISSION_TOPIC = re.compile(
+    r"(?:博士生导师|硕士生导师|招收(?:硕士|博士|研究生)|欢迎.*(?:报考|加入|联系))"
+)
+_METHOD_OR_CV_TOPIC = re.compile(
+    r"^(?:使用|采用|利用|通过|借助)|(?:辅助图像处理|仿真模拟等?手段|等方法(?:开展|进行)|实验手段)"
+)
+_NON_TOPIC_CREDENTIAL = re.compile(
+    r"(?:实习生|评审|职务|Fellow|Distinguished Paper|Best Paper|获奖|人才计划)",
+    re.IGNORECASE,
+)
+
 # 「成果/项目/荣誉」句判别：与 ustc_scraper._is_achievement_topic 同源。
 # raw 已抓取的 research_topics 里混有项目/基金/获奖叙述（方向段后内联、无换行），
 # 离线重跑 build 时也必须二次过滤，否则污染照旧进入检索向量。
@@ -343,7 +479,7 @@ _ACHIEVEMENT_TOPIC_MARKERS = (
     "国家自科", "国家自然科学", "国家自然科学", "国自然", "国家社科", "国家重点研发",
     "国家杰青", "杰青", "优青", "面上项目", "青年科学基金", "青年项目",
     "重点专项", "重大专项", "重大研究计划", "研究计划",
-    "获奖", "荣获", "荣誉", "奖项", "入选", "学会优秀", "取得了",
+    "获奖", "荣获", "荣誉", "奖项", "入选", "学会优秀", "取得了", "人才", "学者",
     "发表", "论文", "专利", "授权", "著作", "出版",
     "案例入库", "案例", "担任", "主编", "编委",
 )
@@ -367,6 +503,51 @@ def _is_boilerplate_topic(topic: str) -> bool:
     if _POSTAL_CODE_TOPIC.search(topic):
         return True
     return any(marker in topic for marker in _BOILERPLATE_TOPIC_MARKERS)
+
+
+def _clean_topic(topic: object, mentor_name: str) -> str | None:
+    """保守清洗官网方向条目，丢弃导航、计数器及参考文献碎片。
+
+    原始页面把栏目、访问统计和部分论文列表与研究方向混在同一文本块时，
+    scraper 会按分隔符切成短条目。这里在最终 RAG 出口再次过滤，保证已有
+    原始数据重建时也不会重新污染检索语料。
+    """
+    text = " ".join(str(topic or "").replace("\u200b", "").split()).strip(" ，,；;、|：:．.")
+    if not text:
+        return None
+    # 去除列表编号；不改正文，避免损失诸如“3D 视觉”里的数字。
+    text = re.sub(r"^(?:\[?\d{1,2}\]?|[①-⑳])\s*[.、)）]\s*", "", text)
+    normalized = text.casefold()
+    if not text or normalized in _NAVIGATION_TOPIC_EXACT:
+        return None
+    if _DATE_ONLY_TOPIC.fullmatch(text):
+        return None
+    if _is_boilerplate_topic(text) or _is_achievement_topic(text):
+        return None
+    if any(marker.casefold() in normalized for marker in _NAVIGATION_TOPIC_MARKERS):
+        return None
+    # 单独的人名、导师身份与招生文案不是研究主题。
+    if text == mentor_name or _LATIN_NAME_FRAGMENT.fullmatch(text) or _BIBLIOGRAPHY_IDENTIFIER.fullmatch(text):
+        return None
+    if _ROLE_OR_ADMISSION_TOPIC.search(text):
+        return None
+    if _METHOD_OR_CV_TOPIC.search(text) or _NON_TOPIC_CREDENTIAL.search(text):
+        return None
+    if len(text) > 120:
+        return None
+    # 引文标题本身不是“研究方向”。有期刊/作者格式、或年份与论文格式并存时排除。
+    bibliography_marker = any(marker in normalized for marker in _BIBLIOGRAPHY_TOPIC_MARKERS)
+    if bibliography_marker or _BIBLIOGRAPHY_TOPIC_RE.search(text) or (
+        _BIBLIOGRAPHY_YEAR.search(text)
+        and ("." in text or "," in text or "(" in text or ")" in text)
+    ):
+        # 研究方向后接“近年在某期刊发表”等引文时，保留引文前的完整主题句；
+        # 若本身就是期刊名/论文标题，则没有可保留的前缀，直接丢弃。
+        prefix = re.split(r"[。；;]", text, maxsplit=1)[0].strip()
+        if prefix and prefix != text and not _BIBLIOGRAPHY_TOPIC_RE.search(prefix):
+            return _clean_topic(prefix, mentor_name)
+        return None
+    return text
 
 
 def _normalize_token(value: str) -> str:
@@ -440,6 +621,42 @@ def _source_match_flag(record: dict) -> bool | None:
     return None
 
 
+_PLATFORM_OVERRIDE_KEYS = {
+    "openalex": "OpenAlex",
+    "s2": "Semantic Scholar",
+    "dblp": "DBLP",
+}
+_PLATFORM_AUTHOR_ID_KEYS = {
+    "openalex": "openalex_author_id",
+    "s2": "s2_author_id",
+    "dblp": "dblp_pid",
+}
+
+
+def _normalized_author_id(value: object) -> str:
+    return str(value or "").strip().casefold().removeprefix("https://openalex.org/")
+
+
+def _paper_identity_status(
+    faculty_id: str,
+    source: dict,
+    manual_overrides: dict[str, dict[str, object]],
+) -> tuple[str, str]:
+    """Return verified/pending/rejected; exact name equality is never verification."""
+    platform = _source_platform(source)
+    override_key = _PLATFORM_OVERRIDE_KEYS.get(platform, platform)
+    mentor_overrides = manual_overrides.get(str(faculty_id), {})
+    if override_key not in mentor_overrides:
+        return "pending", "no_manual_or_strong_identity_verification"
+    approved = mentor_overrides.get(override_key)
+    if approved is None:
+        return "rejected", "manual_override_rejected"
+    actual = source.get(_PLATFORM_AUTHOR_ID_KEYS.get(platform, ""))
+    if _normalized_author_id(approved) == _normalized_author_id(actual):
+        return "verified", "manual_override_author_id"
+    return "rejected", "manual_override_points_to_different_author"
+
+
 def _source_papers(record: dict) -> list[dict]:
     papers = record.get("papers") or []
     # 过滤无标题/空标题的条目，避免污染 publications。
@@ -450,9 +667,31 @@ def _source_papers(record: dict) -> list[dict]:
     return out
 
 
+def _source_metrics(record: dict) -> dict[str, int | float]:
+    """提取论文平台已抓到的作者级统计，供候选记录展示和审计。
+
+    ``publications`` 只保存代表论文标题，长度不能代表作者总论文数。平台返回的
+    works/paper/pub count 与 cited-by count 是独立、可验证的原始统计，之前在组装时
+    被丢弃；保留为 source_metadata 标量键，不改变 CandidateMentor schema。
+    """
+    keys = (
+        "openalex_works_count", "openalex_cited_by_count",
+        "s2_paper_count", "s2_cited_by_count", "dblp_pub_count",
+    )
+    out: dict[str, int | float] = {}
+    for key in keys:
+        value = record.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)) and value >= 0:
+            out[key] = value
+    return out
+
+
 def build_mentor(
     mentor: dict,
     paper_sources: list[dict],
+    manual_overrides: dict[str, dict[str, object]] | None = None,
 ) -> tuple[dict, list[dict], list[str]] | None:
     """为单个导师生成 (candidate_dict, evidence_list, warnings)；非导师返回 None。
 
@@ -467,6 +706,7 @@ def build_mentor(
         return None
 
     candidate_id = _candidate_id(faculty_id)
+    manual_overrides = manual_overrides or {}
     evidence: list[dict] = []
     warnings: list[str] = []
 
@@ -510,20 +750,25 @@ def build_mentor(
 
     # 2) 主页方向（官网解析，先去模板/版权污染）：最终 research_topics 在
     #    处理论文回填后确定（见下方 _finalize_topics），此处仅做源中的初值。
-    topics_from_profile: list[str] = [
-        topic
+    topics_from_profile = _dedupe([
+        cleaned
         for topic in (mentor.get("research_topics") or [])
-        if not _is_boilerplate_topic(topic)
-        and not _is_achievement_topic(topic)
-    ]
+        if (cleaned := _clean_topic(topic, name))
+    ])
+    official_methods = _official_methods_from_topics(topics_from_profile)
     recruitment = mentor.get("recruitment_status")
+    # 搜索页标题有时被误识别为招生信息，例如“某某--欢迎访问…--首页”。
+    if recruitment and any(marker in recruitment for marker in _NAVIGATION_TOPIC_MARKERS):
+        recruitment = None
 
     # 3) 论文证据：合并 OpenAlex / S2 / DBLP 各来源代表论文，逐平台做方向
     #    一致性过滤后统一去重，补 publications / methods / 论文证据。
     publications: list[str] = []
     paper_methods: list[str] = []
     kept_platforms: list[str] = []
+    pending_platforms: list[str] = []
     platform_counts: dict[str, int] = {}
+    source_metrics: dict[str, int | float] = {}
     for source in paper_sources:
         papers = _source_papers(source)
         if not papers:
@@ -539,31 +784,39 @@ def build_mentor(
         #                  论文证据但记 warning，留待人工裁决。
         #   overlap    —— 有重叠信号，保留。
         exact_match = _source_match_flag(source)
+        identity_status, identity_reason = _paper_identity_status(
+            faculty_id, source, manual_overrides
+        )
         drop_reason = None
         uncertain_reason = None
-        if exact_match is False and titles:
-            consistency = _direction_consistency(topics_from_profile, titles)
-            if consistency == "mismatch":
-                drop_reason = (
-                    f"{name} {platform} 作者仅模糊命中 "
-                    f"{_source_display_key(source)}，且其论文标题与官网研究方向"
-                    f"({topics_from_profile[:3]})同语言却无重叠，判定为同名错配，丢弃论文证据"
-                )
-            elif consistency == "uncertain":
-                uncertain_reason = (
-                    f"{name} {platform} 作者仅模糊命中 "
-                    f"{_source_display_key(source)}，官网方向为{topics_from_profile[:3]}、"
-                    f"论文标题跨语言无法自动判定一致性，保留论文证据待人工裁决"
-                    f"（见 export_fuzzy_review.py）"
-                )
+        consistency = _direction_consistency(topics_from_profile, titles) if titles else "no_titles"
+        if identity_status == "rejected":
+            drop_reason = (
+                f"{name} {platform} 作者实体被人工裁决拒绝或与裁决 ID 不一致，"
+                "丢弃该平台论文证据"
+            )
+        elif identity_status == "pending" and consistency == "mismatch":
+            drop_reason = (
+                f"{name} {platform} 作者待核验，且论文标题与官网方向同语言无重叠，"
+                "作为疑似同名错配丢弃"
+            )
+        elif identity_status == "pending" and titles:
+            uncertain_reason = (
+                f"{name} {platform} 作者实体待核验（exact_match={exact_match}），"
+                f"一致性={consistency}；论文只进入待审队列，不建立导师事实"
+            )
         if drop_reason:
             warnings.append(drop_reason)
             continue
         if uncertain_reason:
             warnings.append(uncertain_reason)
-        publications.extend(titles)
-        kept_platforms.append(platform)
-        platform_counts[platform] = platform_counts.get(platform, 0) + 1
+        if identity_status == "verified":
+            publications.extend(titles)
+            kept_platforms.append(platform)
+            platform_counts[platform] = platform_counts.get(platform, 0) + 1
+            source_metrics.update(_source_metrics(source))
+        else:
+            pending_platforms.append(platform)
         # 论文 EvidenceRecord（每平台一条，evidence_id 带平台后缀避免冲突）。
         paper_evidence = {
             "evidence_id": f"ev_{candidate_id}_papers_{platform}",
@@ -578,20 +831,29 @@ def build_mentor(
             "locator": f"{platform} works (sorted by relevance)",
             "retrieved_at": _utcnow_iso(),
             "freshness": "recent",
-            "confidence": 0.9,
+            "confidence": 0.98 if identity_status == "verified" else 0.45,
             "metadata": {
-                "identity_verified": False,
+                "identity_verified": identity_status == "verified",
                 "mentor_role_verified": False,
-                "supports_fields": "research_topics,methods,publications",
+                "supports_fields": (
+                    "research_topics,methods,publications"
+                    if identity_status == "verified"
+                    else "candidate_paper_leads"
+                ),
                 "source_platform": platform,
                 "source_priority": "paper_supplement",
                 "paper_count": len(papers),
+                "identity_review_status": identity_status,
+                "identity_review_reason": identity_reason,
+                "name_exact_match": exact_match is True,
+                "direction_consistency": consistency,
             },
         }
         # 保留来源 ID 到 metadata，便于回溯。
         for src_key in ("openalex_author_id", "s2_author_id", "dblp_pid"):
             if source.get(src_key) is not None:
                 paper_evidence["metadata"][src_key] = source.get(src_key)
+        paper_evidence["metadata"].update(_source_metrics(source))
         evidence.append(paper_evidence)
 
     # 最终研究方向：官网没抓到方向（或方向全被模板过滤掉）但有论文时，
@@ -607,16 +869,18 @@ def build_mentor(
             )
     topics = [*topics_from_profile, *backfilled_topics]
 
-    paper_methods = _paper_methods(" ".join(publications))
+    paper_methods = _paper_methods(publications)
 
-    # 2b) 主页方向证据：在论文回填确定 topics 之后再构建（若官网有方向/招生，
-    #     或本次回填出方向），并把 research_topics 纳入其 supports_fields。
-    if topics or recruitment:
+    # 2b) 官网证据只陈述官网事实，绝不混入论文推断方向。
+    if topics_from_profile or recruitment:
         supported: list[str] = []
         facts: list[str] = []
-        if topics:
+        if topics_from_profile:
             supported.append("research_topics")
-            facts.append(f"研究方向包括：{'；'.join(topics)}")
+            facts.append(f"研究方向包括：{'；'.join(topics_from_profile)}")
+        if official_methods:
+            supported.append("methods")
+            facts.append(f"官网方向明确提及方法：{'；'.join(official_methods)}")
         if recruitment:
             supported.append("recruitment_status")
             facts.append(f"招生信息：{recruitment}")
@@ -637,17 +901,38 @@ def build_mentor(
                 "supports_fields": ",".join(supported),
                 "ustc_faculty_id": faculty_id,
                 "source_priority": "official_profile",
-                # 标记该研究方向是否由论文回填，便于审计与后续人工校正。
-                "topics_backfilled": bool(backfilled_topics),
+                "topics_backfilled": False,
             },
         }
         evidence.append(profile)
+
+    # 已核验论文推断方向使用独立证据，不能伪装成官网事实。
+    if backfilled_topics:
+        evidence.append({
+            "evidence_id": f"ev_{candidate_id}_verified_paper_topics",
+            "candidate_id": candidate_id,
+            "source_type": "verified_paper_topic_inference",
+            "source_uri": mentor.get("profile_url", ""),
+            "title": f"{name}的已核验论文方向推断",
+            "extracted_fact": f"由已核验作者论文支持的方向：{'；'.join(backfilled_topics)}。",
+            "locator": "verified paper titles / controlled lexicon",
+            "retrieved_at": _utcnow_iso(),
+            "freshness": "recent",
+            "confidence": 0.8,
+            "metadata": {
+                "identity_verified": True,
+                "mentor_role_verified": True,
+                "supports_fields": "research_topics",
+                "source_priority": "verified_paper_inference",
+                "topics_backfilled": True,
+            },
+        })
 
     evidence_refs = [e["evidence_id"] for e in evidence]
     # methods 仅来自论文标题的关键词命中（保守，不做推断），去重保序。
     seen: set[str] = set()
     merged_methods: list[str] = []
-    for m in paper_methods:
+    for m in [*official_methods, *paper_methods]:
         k = m.casefold()
         if k and k not in seen:
             seen.add(k)
@@ -663,13 +948,20 @@ def build_mentor(
         # A 后端 CandidateMentor.source_metadata 仅允许标量(str/int/float/bool)，
         # 故把平台列表序列化为逗号分隔字符串（如 "openalex,s2,dblp"），避免 RAG 校验失败。
         "paper_platforms": ",".join(kept_platforms),
+        "pending_paper_platforms": ",".join(_dedupe(pending_platforms)),
         # 1 = 官网抓到，2 = 论文回填，0 = 无方向。供云图/检索区分数据来源。
-        "topics_source": 2 if backfilled_topics else (1 if topics_from_profile else 0),
+        "topics_source": 3 if backfilled_topics else (1 if topics_from_profile else 0),
+        "methods_verified": bool(merged_methods),
+        "paper_identity_verified": bool(kept_platforms),
+        "topics_extracted_count": int(mentor.get("topics_extracted_count") or len(mentor.get("research_topics") or [])),
+        "topics_truncated": bool(mentor.get("topics_truncated", False)),
         # 从官网个人主页富文本抽取的展示用富信息（D 侧详情页 bio/contact/recruiting 读取）。
         "profile_bio": profile_bio,
         "profile_email": profile_email,
         "profile_office": profile_office,
         "profile_graduated_from": profile_graduated_from,
+        # 作者级总论文/被引统计（仅精确匹配平台），与 publications 的代表论文列表互补。
+        **source_metrics,
     }
     source_metadata = {k: v for k, v in source_metadata.items() if v is not None}
 
@@ -727,6 +1019,10 @@ def main() -> None:
         "ustc_mentor_papers.json / _s2 / _dblp 三个）。兼容旧单文件用法。",
     )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--manual-overrides", type=Path, default=DEFAULT_MANUAL_OVERRIDES,
+        help="人工作者实体裁决（默认 data/manual_overrides.json）",
+    )
     args = parser.parse_args()
 
     if not args.raw.exists():
@@ -734,6 +1030,15 @@ def main() -> None:
         return
     raw = json.loads(args.raw.read_text(encoding="utf-8"))
     mentors = raw.get("records", []) if isinstance(raw, dict) else []
+    manual_overrides: dict[str, dict[str, object]] = {}
+    if args.manual_overrides.exists():
+        loaded_overrides = json.loads(args.manual_overrides.read_text(encoding="utf-8"))
+        if isinstance(loaded_overrides, dict):
+            manual_overrides = {
+                str(key): value
+                for key, value in loaded_overrides.items()
+                if isinstance(value, dict)
+            }
 
     # 论文源：未显式给 --papers 时用默认三平台；否则用显式列表（可多次）。
     paper_paths: list[Path] = args.papers or list(DEFAULT_PAPER_SOURCES.values())
@@ -754,7 +1059,7 @@ def main() -> None:
     for mentor in mentors:
         faculty_id = str(mentor.get("faculty_id"))
         paper_sources = papers_by_faculty.get(faculty_id, [])
-        result = build_mentor(mentor, paper_sources)
+        result = build_mentor(mentor, paper_sources, manual_overrides)
         if result is None:
             skipped_non_mentor += 1
             continue
