@@ -273,8 +273,9 @@ function bindEvidence(
     if (!querySupport && !entityVerified) continue;
     // Official provenance does not make a broad parent concept evidence for a
     // narrower query.  Every topic/method record must contain the canonical
-    // query or a typed in-boundary term.
-    if (querySupport && !textRelevantToQuery(query, record)) continue;
+    // query or a typed in-boundary term, except official profile records whose
+    // research_topics themselves were already boundary-assessed above.
+    if (querySupport && sourceLevel !== 'L1' && !textRelevantToQuery(query, record)) continue;
     result.push({
       evidence_id: record.evidence_id,
       candidate_id: candidate.candidate_id,
