@@ -72,7 +72,7 @@ function RecommendPage() {
         猜你喜欢
       </h2>
       <p className={styles.subtitle}>
-        根据你的兴趣画像与学术指标，为你主动推荐可能感兴趣的导师
+        根据你的长期兴趣与近期检索，为你发现尚未收藏的相关导师
       </p>
 
       {loading ? (
@@ -90,7 +90,8 @@ function RecommendPage() {
         <>
           {basedOn.length > 0 && (
             <div className={styles.basedOn}>
-              推荐依据：{basedOn.join('、')}
+              <div>推荐依据：{basedOn.join('、')}</div>
+              <div className={styles.scoreNote}>推荐指数综合主题相关性、兴趣覆盖、近期检索与证据充分度；不是检索页的绝对匹配分。</div>
             </div>
           )}
           <SortSelector value={sortBy} onChange={setSortBy} />

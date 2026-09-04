@@ -30,7 +30,9 @@ export async function probeAgent(timeoutMs = 2500): Promise<boolean> {
   const base = agentBase();
   if (!base) return false;
   try {
-    const res = await fetch(agentUrl('/api/ready'), { signal: AbortSignal.timeout(timeoutMs) });
+    // Mentor search can run in deterministic mode without a chat provider.
+    // Probe its scoped readiness instead of the whole Paper Claw model stack.
+    const res = await fetch(agentUrl('/api/mentor-ready'), { signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return false;
     const payload = await res.json().catch(() => ({}));
     return payload?.ready !== false;

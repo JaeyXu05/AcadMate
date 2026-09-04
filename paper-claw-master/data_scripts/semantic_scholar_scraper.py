@@ -16,7 +16,7 @@
 - 论文用 ``GET /graph/v1/author/{authorId}/papers`` 取 ``limit=100``，客户端按
   ``citationCount`` 降序取前 N（该端点无服务端 sort）。
 - 容错 + 断点续抓：已有且非空 ``papers`` 跳过；429 退避重试。
-- **暂不并入 RAG**：仅产出独立 JSON，留待人工裁决后统一合并。
+- 产出独立 JSON，由 ``build_rag.py`` 统一做作者状态裁决后并入 RAG。
 """
 
 from __future__ import annotations

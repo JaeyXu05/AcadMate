@@ -22,7 +22,10 @@ export interface Advisor {
     | 'calibrated_relevance'
     | 'calibrated_relevance_fallback'
     | 'calibrated_relevance_score'
+    | 'personalized_recommendation'
     | 'local_rag';
+  /** 猜你喜欢中实际命中的兴趣项，用于解释推荐。 */
+  matchedInterests?: string[];
   matchType?: 'DIRECT' | 'ADJACENT' | 'UNRELATED' | 'UNASSESSED';
   scoreBreakdown?: Record<string, number>;
   evidence?: Array<{

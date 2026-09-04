@@ -10,7 +10,7 @@ advisorsRouter.use(authMiddleware);
 // ============================================================================
 // 导师详情（真实 RAG 数据源）
 // ----------------------------------------------------------------------------
-// 由 ragAdvisors.ts 读取 C 产出的 ustc_mentor_rag.json（完整进仓 721 导师 / 1747 证据），用
+// 由 ragAdvisors.ts 读取 C 产出的 ustc_mentor_rag.json（当前 972 导师 / 1969 证据），用
 // candidate_id（如 ustc_faculty_26275）键控，返回前端契约 AdvisorDetail。
 // 检索结果（A 代理 mapFinalMentor 输出同样的 candidate_id）可直接点进详情。
 // RAG 缺失时可看到明确错误，不静默返回假数据。

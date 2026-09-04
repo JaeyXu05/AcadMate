@@ -24,7 +24,9 @@ function MentorCard({ advisor, compact = false, featured = false, onDislike }: M
   const navigate = useNavigate();
   const score = Number(advisor.matchScore);
   const hasScore = Number.isFinite(score) && score > 0;
-  const scorePercent = hasScore ? Math.max(0, Math.min(100, Math.round(score))) : null;
+  const scorePercent = hasScore
+    ? Math.max(0, Math.min(100, Math.round(score * 10) / 10))
+    : null;
   const tags = (advisor.tags ?? []).filter(Boolean).slice(0, 4);
   const reason = firstSentence(advisor.explanation);
   const initial = (advisor.name || '?').charAt(0);

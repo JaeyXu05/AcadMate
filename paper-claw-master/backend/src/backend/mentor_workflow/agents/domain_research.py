@@ -228,7 +228,20 @@ class MentorResearchAgent:
                     }
                 ],
             )
+        retrieved_count = len(combined.candidates)
         combined = _enforce_query_boundary(combined, intent)
+        coverage_report = dict(combined.coverage_report)
+        coverage_report.update(
+            {
+                "retrieved_candidate_count": retrieved_count,
+                "qualified_candidate_count": len(combined.candidates),
+            }
+        )
+        if not combined.candidates:
+            coverage_report.update(_no_match_diagnostics(coverage_report, intent))
+        combined = combined.model_copy(
+            deep=True, update={"coverage_report": coverage_report}
+        )
         ledger = EvidenceLedger(existing_evidence)
         reference_map: dict[str, str] = {}
         for record in combined.evidence:
@@ -301,6 +314,43 @@ class MentorResearchAgent:
             )
         _log_tool_call(intent.trace_id, method_name, started, status="completed")
         return MentorResearchResult.model_validate(result)
+
+
+def _no_match_diagnostics(
+    coverage_report: dict[str, object], intent: IntentPacket
+) -> dict[str, object]:
+    """Explain an empty result without weakening evidence requirements."""
+
+    retrieved = int(coverage_report.get("retrieved_candidate_count") or 0)
+    missing = list(coverage_report.get("missing_concepts") or [])
+    zeroed_at = "retrieval" if retrieved == 0 else "semantic_boundary"
+    relaxations: list[dict[str, str]] = []
+    if len([concept for concept in intent.query_contract.concepts if concept.required]) > 1:
+        relaxations.append(
+            {
+                "action": "allow_adjacent_topic",
+                "reason": "多个研究主题当前按 AND 同时要求，可尝试保留主方向并展示相邻方向。",
+            }
+        )
+    if intent.constraints.recruitment_required:
+        relaxations.append(
+            {
+                "action": "include_unverified_recruitment",
+                "reason": "可展示方向匹配但招生状态尚未核验的导师，并保留风险提示。",
+            }
+        )
+    if missing:
+        relaxations.append(
+            {
+                "action": "expand_aliases",
+                "reason": "部分必需概念在当前语料没有可核验断言，可尝试别名或相邻子领域。",
+            }
+        )
+    return {
+        "zeroed_at_stage": zeroed_at,
+        "missing_concepts": missing,
+        "relaxation_options": relaxations,
+    }
 
 
 def _rewrite_refs(
@@ -385,7 +435,16 @@ def _enforce_query_boundary(
         kept.append(candidate)
         scores[candidate.candidate_id] = score
         match_types[candidate.candidate_id] = match_type
-    kept.sort(key=lambda item: (-scores[item.candidate_id], item.candidate_id))
+    # ``absolute_relevance`` is the semantic gate; local retrieval confidence
+    # breaks residual ties deterministically instead of falling through to ID.
+    kept.sort(
+        key=lambda item: (
+            -scores[item.candidate_id],
+            -float(item.source_metadata.get("retrieve_score") or 0.0),
+            -int(item.source_metadata.get("retrieve_hits") or 0),
+            item.candidate_id,
+        )
+    )
     kept = kept[:5]
     kept_ids = {candidate.candidate_id for candidate in kept}
     evidence: list[EvidenceRecord] = []

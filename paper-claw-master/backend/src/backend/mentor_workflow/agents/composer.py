@@ -121,6 +121,21 @@ class ResultComposerAgent:
             retrieval_attempts=list(state.retrieval_attempts),
             quality_status="PASS" if mentor_results else "NO_MATCH",
             coverage_report=dict(state.coverage_report),
+            no_match_diagnostics=(
+                {
+                    key: state.coverage_report[key]
+                    for key in (
+                        "retrieved_candidate_count",
+                        "qualified_candidate_count",
+                        "zeroed_at_stage",
+                        "missing_concepts",
+                        "relaxation_options",
+                    )
+                    if key in state.coverage_report
+                }
+                if not mentor_results
+                else {}
+            ),
             relation_judgements=list(state.relation_judgements),
         )
 

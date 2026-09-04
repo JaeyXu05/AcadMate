@@ -237,12 +237,9 @@ function mapFinalMentor(m: any, index: number): any {
   const candidate = m?.candidate ?? {};
   const match = m?.match ?? {};
   const candidateEvidence: any[] = Array.isArray(m?.evidence) ? m.evidence : [];
-  const publicationsVerified = candidateEvidence.some((item) =>
-    item?.entity_verified === true && item?.source_level === 'L3'
-    && String(item?.metadata?.supports_fields || '').includes('publications'),
-  );
-  const pubList: unknown[] = publicationsVerified && Array.isArray(candidate.publications)
-    ? candidate.publications : [];
+  // C 侧只把已确认作者的代表作写入 candidate；论文总数使用来源平台的独立口径。
+  const pubList: unknown[] = Array.isArray(candidate.publications) ? candidate.publications : [];
+  const sourcePublicationTotal = Number(candidate.source_metadata?.publication_total_count);
   const evidenceRefs = [
     ...(Array.isArray(candidate.evidence_refs) ? candidate.evidence_refs : []),
     ...(Array.isArray(match.evidence_refs) ? match.evidence_refs : []),
@@ -251,6 +248,11 @@ function mapFinalMentor(m: any, index: number): any {
   const topicScore = Number(
     match.dimension_scores?.research_topic_match ?? match.total_score ?? 0,
   );
+  // `research_topic_match` is deliberately coarse (many direct matches are
+  // 100).  The UI score should instead reflect the workflow's eight-dimension
+  // aggregate, while the topic score remains available in scoreBreakdown.
+  const workflowScore = Number(match.total_score);
+  const displayScore = Number.isFinite(workflowScore) ? workflowScore : topicScore;
   return {
     id: candidate.candidate_id ?? String(index + 1),
     name: candidate.mentor_name ?? '未知导师',
@@ -259,10 +261,14 @@ function mapFinalMentor(m: any, index: number): any {
     tags: cleanTopics(
       Array.isArray(candidate.research_topics) ? candidate.research_topics : [],
     ),
-    papers: pubList.length,
+    papers: Number.isFinite(sourcePublicationTotal) && sourcePublicationTotal >= 0
+      ? sourcePublicationTotal : pubList.length,
     publications: pubList,
-    matchScore: Math.round(topicScore),
-    scoreKind: 'calibrated_relevance',
+    // Preserve one decimal place from A's calibrated score.  Integer rounding
+    // collapsed distinct evidence/retrieval signals (for example 97.9 and
+    // 98.4) into the same visible grade.
+    matchScore: Math.round(displayScore * 10) / 10,
+    scoreKind: 'workflow_match',
     matchType: match.match_type ?? candidate.source_metadata?.match_type ?? 'UNASSESSED',
     scoreBreakdown: match.score_breakdown ?? {},
     confidence: Number(match.confidence ?? topicScore / 100),
@@ -459,6 +465,7 @@ async function collectMentorResult(traceId: string): Promise<{
   retrievalAttempts: any[];
   relationJudgements: any[];
   coverageReport: Record<string, unknown>;
+  noMatchDiagnostics: Record<string, unknown>;
 } | { error: string }> {
   const resultRes = await fetch(agentUrl(`/api/mentor-workflows/${encodeURIComponent(traceId)}/result`), {
     signal: AbortSignal.timeout(agentTimeoutMs()),
@@ -497,7 +504,7 @@ async function collectMentorResult(traceId: string): Promise<{
   ].filter((value, pos, all) => typeof value === 'string' && all.indexOf(value) === pos);
   return {
     advisors,
-    reviewStatus,
+    reviewStatus: noMatch ? 'NO_MATCH' : reviewStatus,
     evidenceRefs,
     evidenceRecords,
     queryContract: data?.query_contract ?? {},
@@ -505,6 +512,9 @@ async function collectMentorResult(traceId: string): Promise<{
     relationJudgements: Array.isArray(data?.relation_judgements) ? data.relation_judgements : [],
     coverageReport: data?.coverage_report && typeof data.coverage_report === 'object'
       ? data.coverage_report
+      : {},
+    noMatchDiagnostics: data?.no_match_diagnostics && typeof data.no_match_diagnostics === 'object'
+      ? data.no_match_diagnostics
       : {},
   };
 }
@@ -560,6 +570,7 @@ async function proxyToMentorAgent(
       retrieval_attempts?: any[];
       relation_judgements?: any[];
       coverage_report?: Record<string, unknown>;
+      no_match_diagnostics?: Record<string, unknown>;
       suggested_next_skill?: string | null;
     }
   | { ok: false; error: string }
@@ -706,6 +717,16 @@ async function proxyToMentorAgent(
       },
       evidence_refs: collected.evidenceRefs,
     });
+    if (collected.reviewStatus === 'NO_MATCH') {
+      onStage({
+        event_type: 'NO_QUALIFIED_MATCH',
+        summary: '严格条件下暂无可核验导师；已提供可放宽项与候选归零诊断。',
+        sender: 'result_composer_agent',
+        receiver: 'api',
+        payload: collected.noMatchDiagnostics,
+        evidence_refs: collected.evidenceRefs,
+      });
+    }
     const identity = isNumericRunId(runId) ? runId : '';
     if (Number.isFinite(userId)) {
       try {
@@ -739,7 +760,10 @@ async function proxyToMentorAgent(
       retrieval_attempts: collected.retrievalAttempts,
       relation_judgements: collected.relationJudgements,
       coverage_report: collected.coverageReport,
-      summary: `为你找到 ${collected.advisors.length} 位匹配导师。审核与返工过程已记入本轮 Agent 活动。`,
+      no_match_diagnostics: collected.noMatchDiagnostics,
+      summary: collected.reviewStatus === 'NO_MATCH'
+        ? '严格条件下暂无可核验导师；已返回可放宽条件与检索诊断。'
+        : `为你找到 ${collected.advisors.length} 位匹配导师。审核与返工过程已记入本轮 Agent 活动。`,
       suggested_next_skill: suggestNextSkill(trustedGrowth),
     };
   } catch (err: any) {
@@ -996,6 +1020,7 @@ agentRouter.post('/chat', (req: AuthRequest, res: Response) => {
             retrieval_attempts: result.retrieval_attempts,
             relation_judgements: result.relation_judgements,
             coverage_report: result.coverage_report,
+            no_match_diagnostics: result.no_match_diagnostics,
             review_decision: {
               status: reviewStatus,
               reviewer_summary: summary,
@@ -1031,6 +1056,7 @@ agentRouter.post('/chat', (req: AuthRequest, res: Response) => {
           threshold: relevanceThreshold(),
           review_status: reviewStatus,
           evidence_refs: advisors.flatMap((a: any) => a.evidenceRefs ?? []),
+          no_match_diagnostics: noMatch ? result.no_match_diagnostics : undefined,
           suggested_next_skill: advisors.length ? result.suggested_next_skill : null,
           clarification_pending: false,
         });

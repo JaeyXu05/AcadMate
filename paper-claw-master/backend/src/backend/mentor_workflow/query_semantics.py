@@ -116,7 +116,27 @@ def candidate_relevance(
 
     official_topics = int(candidate.source_metadata.get("topics_source") or 0) == 1
     topic_score = relation_score if official_topics else relation_score * 0.45
-    final_score = topic_score * 0.92 * (0.82 if fallback else 1.0)
+    # Relation type remains the eligibility gate.  Within one relation bucket,
+    # use the local retriever's deterministic evidence-text score only as a
+    # bounded calibration signal.  This removes broad 92/88.32 ties without
+    # allowing a high lexical score to promote an unrelated candidate.
+    # Unified retrieval preserves dense cosine separately in 0..1.  Do not
+    # send it through the lexical score scale (where 35 is already a strong
+    # hit), otherwise every dense score around 75/100 saturates at 100 and
+    # recreates the tie we are trying to remove.
+    raw_dense_score = candidate.source_metadata.get("dense_score")
+    try:
+        retrieval_signal = max(0.0, min(float(raw_dense_score), 1.0))
+    except (TypeError, ValueError):
+        raw_retrieve_score = candidate.source_metadata.get("retrieve_score")
+        try:
+            retrieval_signal = max(
+                0.0, min(float(raw_retrieve_score) / 35.0, 1.0)
+            )
+        except (TypeError, ValueError):
+            retrieval_signal = 0.0
+    calibration_factor = 0.92 + 0.08 * retrieval_signal
+    final_score = topic_score * calibration_factor * (0.82 if fallback else 1.0)
     final_score = round(max(0.0, min(100.0, final_score)), 2)
 
     relations = [item[1].relation for item in required]
@@ -136,6 +156,8 @@ def candidate_relevance(
         "publication_support": 0.0,
         "concept_coverage": round(matched / max(len(required), 1) * 100, 2),
         "relation_score": round(relation_score, 2),
+        "retrieval_signal": round(retrieval_signal * 100.0, 2),
+        "calibration_factor": round(calibration_factor, 4),
         "evidence_confidence": 95.0 if official_topics else 45.0,
         "fallback_factor": 0.82 if fallback else 1.0,
     }

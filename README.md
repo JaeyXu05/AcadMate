@@ -26,7 +26,7 @@ code/
 │   ├── data_scripts/                  （C：抓取与 RAG 构建脚本）
 │   │   └── README.md                  （C 写的抓取与 RAG 构建流程文档）
 │   └── data/                          （C 产出的 JSON 数据，含核心 RAG 库）
-│       └── ustc_mentor_rag.json       当前进仓检索语料（180 导师 / 358 证据；星图仍用 cloud_data.json 的 715 节点）
+│       └── ustc_mentor_rag.json       当前进仓检索语料（972 导师 / 1969 证据；星图仍用 cloud_data.json 的 715 节点）
 ├── cloud3d/                           【B · 3D 星图数据生成】
 │   ├── build_cloud.py                 读 RAG 库 → 生成 cloud_data.json（坐标/配色）
 │   └── cloud_data.json                银河盘可视化数据（主站后端 /api/cloud/graph 取用）
@@ -50,14 +50,14 @@ code/
 **数据流（核心）：**
 
 ```
-[官网/论文平台] --C抓取--> paper-claw-master/data/ustc_mentor_rag.json (检索语料 180导师/358证据)
+[官网/论文平台] --C抓取--> paper-claw-master/data/ustc_mentor_rag.json (检索语料 972导师/1969证据)
                                     │
         ┌───────────────────────────┼──────────────────────────────┐
         ▼                           ▼                              ▼
    [A后端] mentor_workflow      [B云图] build_cloud.py        [D 网站前端]
    InternalMentorRag.retrieve()  --> cloud_data.json            GET /api/advisors/:id 等
    → 匹配/评分/邮件/PDF          → 主站后端 /api/cloud/graph        （云图已接真实 715 节点）
-                                 → CloudGraph.tsx(Three.js 渲染)     （检索走 180/358 语料）
+                                 → CloudGraph.tsx(Three.js 渲染)     （检索走 972/1969 语料）
 ```
 
 四部分之间的数据都通过 **`candidate_id`**（如 `ustc_faculty_26275`）关联，应与前端 `Advisor.id` / 云图 `CloudNode.id` 保持一致。
@@ -77,7 +77,7 @@ Windows 用户首次使用先双击 `检查启动环境.bat`，它会跨安装�
 - 依赖：`cd Code && npm install`。
 - 启动：`npm run dev` → 前端 `http://localhost:5173`、后端 `http://localhost:3001`。
 - 登录账号：任意邮箱 + 密码（≥6 位）即注册即登录。
-- **当前状态**：云图已接真实 RAG 数据（`GET /api/cloud/graph`，715 导师）；检索已通过 D 代理接入 A 的真实后端（`MENTOR_AGENT_BASE_URL` 指向 :8000，未配置或 A 不可达时**不再回退 stub 导师**，直接报错）。邮件/推荐用语料 180/358，PDF 分析已用 `unpdf` 抽取正文生成 summary/keyPoints + 内容匹配推荐（非 stub）。
+- **当前状态**：云图使用独立历史快照（`GET /api/cloud/graph`，715 导师）；检索已通过 D 代理接入 A 的真实后端（`MENTOR_AGENT_BASE_URL` 指向 :8000，未配置或 A 不可达时**不再回退 stub 导师**，直接报错）。检索、详情、邮件和推荐使用当前 972/1969 RAG；PDF 分析已用 `unpdf` 抽取正文生成 summary/keyPoints + 内容匹配推荐（非 stub）。
 
 **网站功能清单**（登录即注册，任意邮箱 + 密码 ≥6 位）：检索工作台（SSE 流式 + 导师卡片）、历史记录、导师详情页、收藏夹（2~4 位批量对比）、邮件模板、PDF 分析、猜你喜欢、个人信息/偏好设置/注销账号、云图（3D 星云图）。
 
@@ -107,7 +107,7 @@ Windows 用户首次使用先双击 `检查启动环境.bat`，它会跨安装�
 - 环境：Python 3.12+，脚本依赖仅 `httpx`（同时保证 `pydantic` 供 `internal_mentor_rag.py`）。
 - 抓取（按需，均已产出过）：官网 `ustc_scraper.py` → OpenAlex `openalex_scraper.py` → S2 `semantic_scholar_scraper.py` → DBLP `dblp_scraper.py`。
 - 组装：`python data_scripts/build_rag.py` → `data/ustc_mentor_rag.json`。
-- 自检：`python data_scripts/verify_rag.py`（A/B/C/D 四项检查）。
+- 自检：`python data_scripts/verify_rag.py`（A–G 七项检查）。
 - **当前状态**：RAG 库已构建成功（`build_rag_run2.log` / `verify_rag_run2.log` 通过），可直接使用。
 
 详见：[`data_scripts/README.md`](paper-claw-master/data_scripts/README.md)
@@ -118,11 +118,11 @@ Windows 用户首次使用先双击 `检查启动环境.bat`，它会跨安装�
 > （Three.js 渲染真实 715 导师节点）。`cloud3d/` 只保留**数据生成**能力，不再需要独立的演示前端。
 
 - 环境：Python（`py`）用于生成数据。
-- 生成数据：`cd cloud3d && py build_cloud.py`（读 `../paper-claw-master/data/ustc_mentor_rag.json` → 生成 `cloud_data.json`）。
+- 生成数据：`cd cloud3d && py build_cloud.py`（读当前 RAG → 覆盖生成 `cloud_data.json`）。当前 715 节点文件是刻意保留的历史快照；除非决定同步升级星图，否则不要重跑。
 - 主站如何取用：后端 `GET /api/cloud/graph`（`Code/server/routes/cloud.ts`）读取该 `cloud_data.json`，
   映射为 `CloudNode` 并生成同域关系边，前端 CloudGraph 渲染。
 - **当前状态**：`cloud_data.json` 已生成（715 节点），主站星图页已能浏览真实导师网络。
-- 数据更新流程：RAG 库更新后 → 重跑 `build_cloud.py` → 重启主站后端即可。
+- 数据更新流程：只有决定让星图同步当前 RAG 时，才重跑 `build_cloud.py` 并重启主站后端；本次 RAG 清洗不改 715 节点星图。
 
 ---
 
@@ -143,8 +143,8 @@ interface Advisor { id, name, title, department, tags[], hIndex?, papers, matchS
 | `name` | `mentor_name` | `candidate.mentor_name` | ✅ 一致 |
 | `title`(职称) | `source_metadata.academic_title` | `candidate.source_metadata.academic_title` | ✅ 有，需提取 |
 | `department` | `department` | `candidate.department` | ✅ 一致 |
-| `tags` | `research_topics`(仅 500/715) | `candidate.research_topics` | ✅ 有（部分缺，可用 methods 兜底） |
-| `papers` | `len(publications)` / `openalex_works_count` | `candidate.publications` | ✅ 用 `len(publications)` |
+| `tags` | `research_topics`（668/972） | `candidate.research_topics` | ✅ 有（部分缺，可用 methods 兜底） |
+| `papers` | `source_metadata.publication_total_count` | `candidate.publications` | ✅ 总数用于计数，代表作列表用于展示 |
 | `hIndex` | ❌ **RAG 无** | ❌ **后端无此字段** | ✅ 已在 Type 留可选字段，界面不再展示，改用 `papers` |
 | `matchScore` | ❌ 静态库无 | `match.total_score`(0-100) | ✅ 来自 A 检索时动态计算（代理映射） |
 | `explanation` | `evidence.extracted_fact` 可拼 | `match.rationale` / `dimension_scores` | ✅ 用 A 的 rationale（代理里 join） |
@@ -158,7 +158,7 @@ interface Advisor { id, name, title, department, tags[], hIndex?, papers, matchS
 
 3. **检索接口形态** ✅ **已实现（D 代理轮询）**：前端走 `POST /api/agent/chat`（SSE：结构化 `stage` 透传 `payload/evidence_refs`，并兼容 `thinking/result/summary/done/error`）。D 先尝试 A 的 `POST /api/runs`（skill `mentor_match`），失败则回退 `POST /api/mentor-workflows`，再 resume → 轮询 events/status → review/evidence/result。`MENTOR_AGENT_BASE_URL` 未配置或 A 连不上时**不回退王某某等 stub 导师**。详情页「阅读其论文」经 Harness 创建真实 Paper Claw `AgentRun`，使用 `RetrievalService` 取 chunk；只有 run 成功且回答引用检索证据时才 Review PASS 并服务端写回成长状态。
 
-4. ~~**云图接口形态（B/C）**~~ ✅ **已解决并完成集成**：后端 `GET /api/cloud/graph`（`Code/server/routes/cloud.ts`）读取 `cloud_data.json`，映射为 `CloudNode` 并动态生成同域关系边（`same-field`），前端 `CloudGraph.tsx` 已改为真实 Three.js 渲染 715 导师节点。云图数据不再走 mock。**不要把星图 715 改成 180。**
+4. ~~**云图接口形态（B/C）**~~ ✅ **已解决并完成集成**：后端 `GET /api/cloud/graph`（`Code/server/routes/cloud.ts`）读取 `cloud_data.json`，映射为 `CloudNode` 并动态生成同域关系边（`same-field`），前端 `CloudGraph.tsx` 已改为真实 Three.js 渲染 715 导师节点。云图数据不再走 mock。**715 是独立历史快照，不随当前 972 人检索库自动变化。**
 
 > 上述字段映射均按 **D 的协作铁律**收在 D 侧（`Code/server/routes/agent.ts` 的 `mapFinalMentor()`），A/C 输出格式零改动、前端组件零改动。
 

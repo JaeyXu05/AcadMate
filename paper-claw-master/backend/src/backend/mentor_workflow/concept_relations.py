@@ -10,6 +10,7 @@ judge and can later be upgraded by an optional model-backed judge.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Iterable
@@ -60,23 +61,34 @@ CONCEPT_FAMILIES: tuple[ConceptFamily, ...] = (
             "生成式人工智能",
             "generative ai",
             "生成模型",
-            "大语言模型",
             "大模型",
-            "llm",
             "扩散模型",
             "diffusion model",
             "foundation model",
         ),
         children=(
             "生成模型",
-            "大语言模型",
             "大模型",
-            "llm",
             "扩散模型",
             "diffusion model",
             "foundation model",
         ),
         parents=("人工智能", "ai", "机器学习", "深度学习"),
+    ),
+    ConceptFamily(
+        "large_language_models",
+        (
+            "大语言模型",
+            "large language model",
+            "large language models",
+            "language model",
+            "llm",
+            "预训练语言模型",
+            "pretrained language model",
+        ),
+        children=("大语言模型", "llm", "预训练语言模型"),
+        parents=("生成式人工智能", "generative ai", "大模型", "foundation model"),
+        canonical="大语言模型",
     ),
     ConceptFamily(
         "recommender_systems",
@@ -143,6 +155,135 @@ CONCEPT_FAMILIES: tuple[ConceptFamily, ...] = (
         parents=("机器学习", "machine learning", "人工智能", "ai"),
         canonical="graph learning",
     ),
+    # Cross-disciplinary academic labels frequently use a department-level
+    # synonym rather than the student's textbook term.  These families stay
+    # deliberately narrow: they normalise equivalent labels, not broad parent
+    # disciplines such as "数学" or "计算机科学".
+    ConceptFamily(
+        "probability_statistics",
+        ("概率论", "概率统计", "probability theory", "probability and statistics"),
+        canonical="概率论",
+    ),
+    ConceptFamily(
+        "graph_combinatorics",
+        ("组合数学", "图论组合", "combinatorics", "graph theory and combinatorics"),
+        canonical="组合数学",
+    ),
+    ConceptFamily(
+        "computational_mathematics",
+        (
+            "计算数学",
+            "数值分析",
+            "科学计算",
+            "numerical analysis",
+            "scientific computing",
+        ),
+        canonical="计算数学",
+    ),
+    ConceptFamily(
+        "remote_sensing_change_detection",
+        ("遥感变化检测", "remote sensing change detection", "变化检测"),
+        canonical="遥感变化检测",
+    ),
+    ConceptFamily(
+        "privacy_preserving_ml",
+        (
+            "隐私保护",
+            "隐私保护机器学习",
+            "隐私保护学习",
+            "隐私计算",
+            "数据隐私",
+            "privacy protection",
+            "data privacy",
+            "privacy preserving",
+            "privacy-preserving machine learning",
+            "privacy preserving machine learning",
+            "privacy computing",
+        ),
+        canonical="隐私保护机器学习",
+    ),
+    ConceptFamily(
+        "computer_vision",
+        (
+            "计算机视觉",
+            "computer vision",
+            "视觉理解",
+            "视觉感知",
+            "图像视频分析",
+            "image and video analysis",
+        ),
+        children=("视觉理解", "视觉感知", "图像视频分析"),
+        parents=("人工智能", "ai", "机器学习", "machine learning"),
+        canonical="计算机视觉",
+    ),
+    ConceptFamily(
+        "distributed_systems",
+        (
+            "分布式系统",
+            "distributed systems",
+            "cloud computing",
+            "云计算",
+            "分布式计算",
+        ),
+        children=("云计算", "分布式计算"),
+        parents=("计算机系统", "computer systems"),
+        canonical="分布式系统",
+    ),
+    ConceptFamily(
+        "compiler_optimization",
+        (
+            "编译器优化",
+            "compiler optimization",
+            "compiler optimizations",
+            "编译技术",
+            "编译器",
+            "program optimization",
+        ),
+        children=("编译技术", "编译器"),
+        parents=("计算机系统", "computer systems"),
+        canonical="编译器优化",
+    ),
+    ConceptFamily(
+        "bayesian_statistics",
+        (
+            "贝叶斯统计",
+            "bayesian statistics",
+            "bayesian inference",
+            "贝叶斯推断",
+            "贝叶斯方法",
+        ),
+        children=("贝叶斯推断", "贝叶斯方法"),
+        parents=("统计", "statistics", "概率论", "probability theory"),
+        canonical="贝叶斯统计",
+    ),
+    ConceptFamily(
+        "drug_discovery",
+        (
+            "药物发现",
+            "drug discovery",
+            "药物设计",
+            "drug design",
+            "计算机辅助药物设计",
+            "computer-aided drug design",
+            "cadd",
+        ),
+        children=("药物设计", "计算机辅助药物设计"),
+        parents=("化学生物学", "生物医学"),
+        canonical="药物发现",
+    ),
+    # This is an established compound field, not two independent student
+    # constraints.  Splitting it on "与" used to discard an official
+    # fuel-cell systems mentor whose profile used a more specific expression.
+    ConceptFamily(
+        "hydrogen_fuel_cells",
+        (
+            "氢能与燃料电池", "氢燃料电池", "燃料电池", "fuel cell",
+            "fuel cells", "hydrogen fuel cell", "hydrogen energy",
+        ),
+        children=("氢燃料电池系统", "燃料电池系统"),
+        parents=("能源", "energy"),
+        canonical="氢能与燃料电池",
+    ),
 )
 
 
@@ -181,10 +322,17 @@ _SPLIT_RE = re.compile(r"\s*(?:和|与|以及|及|、|,|，|;|；|\+|/|或)\s*")
 _STOP_CONCEPT_RE = re.compile(
     r"^(?:方向|研究方向|相关方向|导师|老师|教授|博导|领域|方面)$"
 )
+_CONSTRAINT_SURFACE_RE = re.compile(
+    r"(?:招生|招收|在招|名额|偏理论|理论导向|本科生|愿意带|学院|院系|实验室)",
+    flags=re.IGNORECASE,
+)
+_METHOD_PREFIX_RE = re.compile(r"^(?:用|使用|基于|通过|采用)")
+_APPLICATION_PREFIX_RE = re.compile(r"^(?:用于|面向|解决|应用于)")
 
 
 def clean_query_text(value: str) -> str:
     text = " ".join(str(value or "").split()).strip("。.!！?？,，;；")
+    text = re.sub(r"^我(?:想|希望)(?:要)?", "", text)
     text = _WRAPPER_RE.sub("", text)
     # ``推荐`` is a wrapper only when it explicitly introduces a person or
     # direction request.  In ``推荐系统``/``推荐算法`` it is a core domain
@@ -212,10 +360,18 @@ def extract_query_concepts(
     if raw:
         # Split only explicit coordination.  A phrase such as "大模型推荐"
         # remains intact instead of being silently rewritten to "大模型".
-        pieces = [piece.strip() for piece in _SPLIT_RE.split(raw) if piece.strip()]
+        # A registered compound discipline may conventionally contain a
+        # conjunction.  It is one topic, not a Boolean AND query.
+        pieces = [raw] if _whole_label_family(_semantic_normalize(raw)) else [
+            piece.strip() for piece in _SPLIT_RE.split(raw) if piece.strip()
+        ]
         for piece in pieces or [raw]:
-            if not _STOP_CONCEPT_RE.fullmatch(piece):
-                surfaces.append((piece, QueryConceptRole.core_topic, True, InputSource.text))
+            if _STOP_CONCEPT_RE.fullmatch(piece):
+                continue
+            role, required = _classify_raw_surface(
+                piece, method_values, application_values
+            )
+            surfaces.append((piece, role, required, InputSource.text))
     if not surfaces:
         for value in supplied:
             if _normalize(value) in {_normalize(item[0]) for item in surfaces}:
@@ -254,8 +410,19 @@ def extract_query_concepts(
 
 def canonical_for(value: str) -> str:
     text = clean_query_text(value)
-    normalized = _normalize(text)
-    family = family_for(normalized)
+    normalized = _semantic_normalize(text)
+    # A family may occur *inside* a longer natural-language request.  That is
+    # useful for recall expansion, but must never collapse e.g. "大模型辅助
+    # 医学文本分析" into merely "生成式人工智能" and discard the application
+    # constraint.  Canonicalise only whole-label aliases.
+    family = next(
+        (
+            item
+            for item in CONCEPT_FAMILIES
+            if any(_normalize(alias) == normalized for alias in item.aliases)
+        ),
+        None,
+    )
     if family is None:
         return text
     # Only canonicalise when the family alias is the whole cleaned phrase or a
@@ -280,11 +447,11 @@ def preserved_tokens(surface: str, canonical: str) -> list[str]:
 
 
 def family_for(value: str) -> ConceptFamily | None:
-    normalized = _normalize(value)
+    normalized = _semantic_normalize(value)
     matches = [
         family
         for family in CONCEPT_FAMILIES
-        if any(_normalize(alias) in normalized for alias in family.aliases)
+        if any(_alias_matches_text(alias, normalized) for alias in family.aliases)
     ]
     return max(matches, key=lambda item: max(map(lambda alias: len(_normalize(alias)), item.aliases)), default=None)
 
@@ -326,8 +493,8 @@ def judge_relation(
     """Judge one query concept against one structured mentor assertion."""
 
     query_text = query.canonical if isinstance(query, QueryConcept) else str(query)
-    query_norm = _normalize(query_text)
-    candidate_norm = _normalize(candidate_topic)
+    query_norm = _semantic_normalize(query_text)
+    candidate_norm = _semantic_normalize(candidate_topic)
     if not query_norm or not candidate_norm:
         return RelationJudgement(Relation.UNRELATED, 0.0, reason="empty_concept")
     if query_norm == candidate_norm:
@@ -337,7 +504,10 @@ def judge_relation(
             matched_anchor=query_text,
             reason="candidate assertion contains the canonical query",
         )
-    query_family = family_for(query_norm)
+    # Query families must be whole-label matches.  A longer request can
+    # mention a known field without authorising us to discard its remaining
+    # conditions (e.g. medical text analysis in an LLM request).
+    query_family = _whole_label_family(query_norm)
     candidate_family = family_for(candidate_norm)
     if query_norm in candidate_norm:
         return RelationJudgement(
@@ -365,6 +535,21 @@ def judge_relation(
 
     if query_family and candidate_family:
         if query_family.concept_id == candidate_family.concept_id:
+            candidate_alias = next(
+                (
+                    alias
+                    for alias in candidate_family.aliases
+                    if _alias_matches_text(alias, candidate_norm)
+                ),
+                None,
+            )
+            if candidate_alias is not None:
+                return RelationJudgement(
+                    Relation.SYNONYM,
+                    96.0,
+                    matched_anchor=candidate_alias,
+                    reason="candidate assertion contains a registered academic-label alias",
+                )
             if candidate_norm in {
                 _normalize(item) for item in candidate_family.children
             } and candidate_norm != query_norm:
@@ -435,6 +620,21 @@ def judge_relation(
             matched_anchor=next(iter(shared)),
             reason="shared required anchor with a narrower assertion",
         )
+    # Unknown disciplines do not have a hand-curated ontology.  A high
+    # bigram-aware coverage score is still a defensible relation (for example
+    # ``概率论`` and a profile label ``概率统计``) and works for every field.
+    # One shared CJK bigram/English token prevents a single common character
+    # from turning into a false positive.
+    shared_phrases = [
+        token for token in shared if len(token) >= 2 and token not in GENERIC_PARENTS
+    ]
+    if overlap >= 0.6 and shared_phrases:
+        return RelationJudgement(
+            Relation.SUBFIELD,
+            76.0,
+            matched_anchor=next(iter(shared_phrases)),
+            reason="high generic phrase coverage",
+        )
     if overlap >= 0.25:
         return RelationJudgement(
             Relation.RELATED,
@@ -487,8 +687,73 @@ def _contains_surface(surfaces: list[tuple[str, QueryConceptRole, bool, InputSou
     return any(_normalize(surface) == _normalize(value) for surface, *_ in surfaces)
 
 
+def _classify_raw_surface(
+    surface: str,
+    methods: Iterable[str],
+    applications: Iterable[str],
+) -> tuple[QueryConceptRole, bool]:
+    """Classify a raw query fragment without turning preferences into topics.
+
+    Raw text remains in the contract for auditability, but only genuine research
+    topics are required for semantic eligibility.  Structured fields win when
+    they name the same fragment; natural-language markers provide a small,
+    deterministic bridge for the common search-box phrasing.
+    """
+
+    normalized = _normalize(surface)
+    method_values = {_normalize(value) for value in methods}
+    application_values = {_normalize(value) for value in applications}
+    if _CONSTRAINT_SURFACE_RE.search(surface):
+        return QueryConceptRole.constraint, False
+    if normalized in method_values or _METHOD_PREFIX_RE.match(surface):
+        return QueryConceptRole.method, False
+    if normalized in application_values or _APPLICATION_PREFIX_RE.match(surface):
+        return QueryConceptRole.application_domain, False
+    return QueryConceptRole.core_topic, True
+
+
 def _normalize(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").casefold()).strip()
+
+
+def _semantic_normalize(value: str) -> str:
+    """Normalise formatting/template residue without erasing topic meaning."""
+
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r"[（(][^（）()]{0,80}[）)]", "", text)
+    text = re.sub(
+        r"^(?:研究兴趣(?:主要)?包括?|研究方向(?:主要)?包括?|主要研究(?:方向)?为?|方向为?)[:：\s]*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"(?:研究方向|相关方向)$", "", text).strip("：:;；，,。.")
+    return _normalize(text)
+
+
+def _alias_matches_text(alias: str, normalized_text: str) -> bool:
+    normalized_alias = _semantic_normalize(alias)
+    if not normalized_alias:
+        return False
+    if re.fullmatch(r"[a-z0-9.-]{1,3}", normalized_alias):
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(normalized_alias)}(?![a-z0-9])",
+                normalized_text,
+            )
+        )
+    return normalized_alias in normalized_text
+
+
+def _whole_label_family(normalized_text: str) -> ConceptFamily | None:
+    return next(
+        (
+            family
+            for family in CONCEPT_FAMILIES
+            if any(_normalize(alias) == normalized_text for alias in family.aliases)
+        ),
+        None,
+    )
 
 
 def normalize(value: str) -> str:

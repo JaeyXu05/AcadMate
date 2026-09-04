@@ -43,7 +43,11 @@ from backend.mentor_workflow.topic_cleaning import clean_topics as _clean_topics
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAG_PATH = REPO_ROOT / "data" / "ustc_mentor_rag.json"
-DEFAULT_TOP_K = 20
+# Keep a broad, deterministic candidate pool for the typed semantic boundary
+# stage.  The workflow subsequently applies its evidence and relevance gates
+# before returning at most five mentors to the UI.
+DEFAULT_TOP_K = 80
+HIT_BONUS = 1.5
 
 
 def _normalize(value: str) -> str:
@@ -60,6 +64,43 @@ def _contains(text: str, term: str) -> bool:
     if re.fullmatch(r"[a-z0-9]{1,2}", t):
         return bool(re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", hay))
     return t in hay
+
+
+def _high_coverage_cjk_match(values: list[str], term: str) -> bool:
+    """Recall a near-normalised CJK label without accepting a vague overlap.
+
+    This is deliberately recall-only.  The typed relation and evidence gates
+    still decide qualification.  It helps labels such as ``常微分方程`` find a
+    profile written as ``微分方程`` while rejecting ``随机过程`` vs ``随机图``.
+    """
+
+    query_chars = _CJK.findall(_normalize(term))
+    if len(query_chars) < 3:
+        return False
+    query_units = set(query_chars)
+    query_units.update(
+        query_chars[index] + query_chars[index + 1]
+        for index in range(len(query_chars) - 1)
+    )
+    query_bigrams = {unit for unit in query_units if len(unit) == 2}
+    if not query_bigrams:
+        return False
+    for value in values:
+        candidate_chars = _CJK.findall(_normalize(value))
+        if len(candidate_chars) < 2:
+            continue
+        candidate_units = set(candidate_chars)
+        candidate_units.update(
+            candidate_chars[index] + candidate_chars[index + 1]
+            for index in range(len(candidate_chars) - 1)
+        )
+        shared = query_units & candidate_units
+        if (
+            len(shared) / len(query_units) >= 0.6
+            and query_bigrams & candidate_units
+        ):
+            return True
+    return False
 
 
 def _unique(values: list[str]) -> list[str]:
@@ -136,7 +177,7 @@ def _cosine_similarity(a: dict[str, float], b: dict[str, float]) -> float:
     """两个加权 TF 向量的余弦相似度。"""
     if not a or not b:
         return 0.0
-    dot = sum(weight for token, weight in a.items() if token in b)
+    dot = sum(weight * b[token] for token, weight in a.items() if token in b)
     if dot <= 0:
         return 0.0
     norm_a = math.sqrt(sum(v * v for v in a.values()))
@@ -244,7 +285,9 @@ class FileInternalMentorRag:
         # 合并成一条查询文本，与候选向量算语义相似度（离线、确定性）。
         query_vector = _weighted_vector(_term_vector(" ".join(concepts)), self._idf)
 
-        scored: list[tuple[float, str, int, CandidateMentor]] = []
+        scored: list[
+            tuple[float, str, int, int, int, float, CandidateMentor]
+        ] = []
         for index, candidate in enumerate(self._candidates):
             # 精确约束优先：名字或 ID 命中即召回。
             if mentor_filter and _normalize(candidate.mentor_name) not in mentor_filter:
@@ -263,20 +306,56 @@ class FileInternalMentorRag:
                     candidate.department or "",
                 ]
             )
-            hits = sum(1 for concept in concepts if _contains(haystack, concept))
+            searchable_fields = [
+                *candidate.research_topics,
+                *candidate.methods,
+                *candidate.publications,
+                candidate.department or "",
+            ]
+            exact_hits = sum(
+                1 for concept in concepts if _contains(haystack, concept)
+            )
+            fuzzy_hits = sum(
+                1
+                for concept in concepts
+                if not _contains(haystack, concept)
+                and _high_coverage_cjk_match(searchable_fields, concept)
+            )
+            hits = exact_hits + fuzzy_hits
             cosine = (
                 _cosine_similarity(query_vector, self._candidate_vectors[index])
                 if self._candidate_vectors
                 else 0.0
             )
-            score = cosine * 100.0 + hits * 3.0
+            # ``hits`` is only a small lexical tie-breaker.  Its semantics are
+            # intentionally weaker than the TF-IDF score: domain expansion can
+            # add broad aliases, which must not overwhelm a specific match.
+            score = cosine * 100.0 + hits * HIT_BONUS
             # 无精确姓名/ID 时，hits=0 的余弦噪声不得入榜。
             if mentor_filter or candidate_filter or hits >= 1:
-                scored.append((score, candidate.candidate_id, hits, candidate))
+                scored.append(
+                    (
+                        score,
+                        candidate.candidate_id,
+                        hits,
+                        exact_hits,
+                        fuzzy_hits,
+                        cosine,
+                        candidate,
+                    )
+                )
 
         scored.sort(key=lambda item: (-item[0], -item[2], item[1]))
         kept: list[CandidateMentor] = []
-        for score, _candidate_id, hits, candidate in scored[:DEFAULT_TOP_K]:
+        for (
+            score,
+            _candidate_id,
+            hits,
+            exact_hits,
+            fuzzy_hits,
+            cosine,
+            candidate,
+        ) in scored[:DEFAULT_TOP_K]:
             kept.append(
                 candidate.model_copy(
                     deep=True,
@@ -284,7 +363,10 @@ class FileInternalMentorRag:
                         "source_metadata": {
                             **candidate.source_metadata,
                             "retrieve_hits": int(hits),
+                            "retrieve_exact_hits": int(exact_hits),
+                            "retrieve_fuzzy_hits": int(fuzzy_hits),
                             "retrieve_score": round(float(score), 4),
+                            "retrieve_cosine": round(float(cosine), 6),
                         }
                     },
                 )

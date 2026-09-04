@@ -128,7 +128,7 @@ function ComparePage() {
     { label: '论文数', render: (a) => a.papers, best: (a) => a.papers === maxPapers && a.papers > 0 },
     {
       label: '相关性评分（非概率）',
-      render: (a) => `${Math.round(a.matchScore)}/100`,
+      render: (a) => `${Math.round(a.matchScore * 10) / 10}/100`,
       best: (a) => a.matchScore === maxMatch && a.matchScore > 0,
     },
   ];

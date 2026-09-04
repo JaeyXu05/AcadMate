@@ -8,7 +8,7 @@
     "dev:frontend": "vite",
     "dev:backend": "tsx server/index.ts",
     "test": "npm run test:cloud",
-    "test:cloud": "tsx --test server/routes/cloudData.test.ts server/data/mentorRetrieval.test.ts server/researchRuntime.test.ts src/utils/galaxyBackground.test.ts",
+    "test:cloud": "tsx --test server/routes/cloudData.test.ts server/data/mentorRetrieval.test.ts server/data/recommendRanking.test.ts server/researchRuntime.test.ts src/utils/galaxyBackground.test.ts",
     "check": "npm run test && npm run build",
     "build": "tsc -b && vite build",
     "preview": "vite preview"

@@ -90,6 +90,25 @@ def test_flow_c_insufficient_input_requests_clarification_without_candidates():
     )
 
 
+def test_empty_match_emits_structured_no_match_diagnostic():
+    tool = SequenceResearchTool(local_results=[])
+    orchestrator, _, bus = _orchestrator(tool)
+
+    state = orchestrator.create(
+        MentorWorkflowRequest(
+            message="find mentors in an unavailable niche",
+            research_topics=["unavailable niche"],
+        )
+    )
+
+    assert state.final_result is not None
+    assert state.final_result.quality_status == "NO_MATCH"
+    assert state.final_result.no_match_diagnostics["zeroed_at_stage"] == "retrieval"
+    assert WorkflowEventType.no_qualified_match in [
+        event.event_type for event in bus.list_events(state.trace_id)
+    ]
+
+
 def test_flow_d_contact_email_reuses_approved_result_without_new_research(
     research_result_factory,
 ):

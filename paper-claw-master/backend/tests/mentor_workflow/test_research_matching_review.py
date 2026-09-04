@@ -217,6 +217,24 @@ def test_matching_empty_optional_dimensions_do_not_default_to_fifty(
     assert matches[0].total_score == matches[0].dimension_scores.research_topic_match
 
 
+def test_matching_uses_verified_requested_method_only_for_ranking(
+    research_result_factory,
+):
+    method_match = research_result_factory(candidate_id="method-match")
+    method_miss = research_result_factory(candidate_id="method-miss")
+    method_miss.candidates[0].methods = ["bayesian optimization"]
+    matches = MatchingAgent().run(
+        _intent(),
+        [*method_match.candidates, *method_miss.candidates],
+        EvidenceLedger([*method_match.evidence, *method_miss.evidence]),
+    )
+
+    assert matches[0].candidate_id == "method-match"
+    assert matches[0].total_score == matches[0].dimension_scores.research_topic_match
+    assert matches[0].rank_score is not None
+    assert matches[0].rank_score > matches[1].rank_score
+
+
 def test_matching_rejects_unknown_evidence_reference(research_result_factory):
     result = research_result_factory()
     result.candidates[0].evidence_refs = ["missing"]

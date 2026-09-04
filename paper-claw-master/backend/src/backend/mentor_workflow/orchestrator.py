@@ -552,6 +552,14 @@ class MentorWorkflowOrchestrator:
             payload={"mentor_count": len(final_result.mentors)},
             evidence_refs=final_result.evidence_refs,
         )
+        if final_result.quality_status == "NO_MATCH":
+            self._emit(
+                state,
+                WorkflowEventType.no_qualified_match,
+                sender=self.composer_agent.name,
+                receiver="api",
+                payload=final_result.no_match_diagnostics,
+            )
         return state
 
     def _clarification(

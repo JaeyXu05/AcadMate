@@ -917,6 +917,7 @@ class ModelDrivenMatchingAgent:
             assessment.candidate_id: assessment
             for assessment in self.session.candidate_assessments
         }
+        candidates_by_id = {candidate.candidate_id: candidate for candidate in candidates}
         revised: list[MatchResult] = []
         for result in base_results:
             assessment = assessments.get(result.candidate_id)
@@ -936,10 +937,17 @@ class ModelDrivenMatchingAgent:
                     "student_background_fit": assessment.project_background_fit,
                 }
             )
+            candidate = candidates_by_id.get(result.candidate_id)
+            rank_score = (
+                self.base.rank_score(intent, candidate, dimensions)[0]
+                if candidate is not None
+                else result.rank_score
+            )
             revised.append(
                 result.model_copy(
                     update={
                         "total_score": dimensions.mean_score(),
+                        "rank_score": rank_score,
                         "dimension_scores": dimensions,
                         "rationale": _unique(
                             [
@@ -961,7 +969,8 @@ class ModelDrivenMatchingAgent:
                 )
             )
         ranked = sorted(
-            revised, key=lambda item: (-item.total_score, item.candidate_id)
+            revised,
+            key=lambda item: (-(item.rank_score or item.total_score), -item.total_score, item.candidate_id),
         )
         return [
             item.model_copy(update={"ranking_position": index})

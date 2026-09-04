@@ -27,7 +27,8 @@ class InputUnderstandingAgent:
         self, request: MentorWorkflowRequest, state: WorkflowState
     ) -> tuple[IntentPacket, ClarificationRequest | None]:
         goal = request.goal or _detect_goal(request.message)
-        message_topics = _topics_from_text(request.message)
+        normalized_message = _correct_search_box_typos(request.message)
+        message_topics = _topics_from_text(normalized_message)
         document_topics = [
             topic
             for document in request.parsed_documents
@@ -67,6 +68,7 @@ class InputUnderstandingAgent:
             ]
         )
         constraints = request.constraints.model_copy(deep=True)
+        _apply_text_constraints(request.message, constraints)
         if not constraints.colleges:
             constraints.colleges = ["中国科学技术大学"]
         constraints.departments = _unique(
@@ -108,7 +110,7 @@ class InputUnderstandingAgent:
             constraints=constraints,
             user_profile=request.user_profile.model_copy(deep=True),
             projects=[project.model_copy(deep=True) for project in request.projects],
-            raw_message=request.message,
+            raw_message=normalized_message,
             confidence=confidence,
             missing_fields=missing,
             raw_input_refs=_unique(
@@ -120,7 +122,7 @@ class InputUnderstandingAgent:
             ),
             clarification_questions=questions,
             query_contract=build_query_contract(
-                request.message,
+                normalized_message,
                 _unique([*topics, *request.research_topics]),
                 methods,
                 applications,
@@ -305,6 +307,36 @@ def _bare_query_topic(message: str) -> str | None:
 
 def _normalize_query(message: str) -> str:
     return " ".join(message.split()).strip("。.!！?？,，")
+
+
+def _correct_search_box_typos(message: str) -> str:
+    """Correct only unambiguous command-word typos before intent parsing.
+
+    This deliberately does not rewrite research terminology.  The original
+    request remains persisted in ``WorkflowState.request``; only the derived
+    retrieval view is normalised.
+    """
+
+    return re.sub(r"(^|[，,。；;\s])找作(?=[\u4e00-\u9fffA-Za-z])", r"\1找做", message)
+
+
+def _apply_text_constraints(message: str, constraints) -> None:
+    """Promote common search-box preferences into explicit constraints.
+
+    These terms must not be reinterpreted as required research concepts by the
+    query contract.  Explicit request fields keep precedence over this light
+    deterministic extraction.
+    """
+
+    text = _normalize_query(message).casefold()
+    if constraints.recruitment_required is None and any(
+        marker in text for marker in ("正在招生", "招收学生", "有招生名额", "在招")
+    ):
+        constraints.recruitment_required = True
+    if constraints.theory_preference is None and any(
+        marker in text for marker in ("偏理论", "理论导向", "理论研究")
+    ):
+        constraints.theory_preference = 1.0
 
 
 def _missing_fields(

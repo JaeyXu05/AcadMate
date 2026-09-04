@@ -35,9 +35,18 @@ BOILERPLATE_TOPIC_MARKERS = (
     "获奖信息",
     "招生信息",
 )
-BOILERPLATE_TOPIC_EXACT = {"more", "gallery", "news", "vacancy"}
+BOILERPLATE_TOPIC_EXACT = {
+    "more", "gallery", "news", "vacancy",
+    # Navigation, contact and venue labels occasionally leak from profile
+    # pages into the direction list.  They are not research assertions.
+    "联系我们", "contact us", "group", "icml", "ieee tie",
+}
 _POSTAL_CODE = re.compile(
     r"(?:邮\s*编|邮政编码).{0,12}\d{5,6}|^\d{6}$"
+)
+_YEAR_OR_VENUE = re.compile(r"^(?:19|20)\d{2}$|^ieee\s+[a-z.\s]+$", re.IGNORECASE)
+_DANGLING_TOPIC_SENTENCE = re.compile(
+    r"^(?:用于|应用于|通过|主要研究(?:体系)?包括|研究兴趣主要包括).{0,80}$"
 )
 
 # 「成果/项目/荣誉」句判别：与 data_scripts 的 ustc_scraper / build_rag 同源。
@@ -76,6 +85,8 @@ def is_boilerplate_topic(topic: str) -> bool:
     if text.casefold() in BOILERPLATE_TOPIC_EXACT:
         return True
     if _POSTAL_CODE.search(text):
+        return True
+    if _YEAR_OR_VENUE.fullmatch(text) or _DANGLING_TOPIC_SENTENCE.match(text):
         return True
     return any(marker in text for marker in BOILERPLATE_TOPIC_MARKERS)
 

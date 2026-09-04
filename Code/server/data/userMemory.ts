@@ -67,7 +67,8 @@ export function loadRecommendMemory(userId: number): RecommendMemory {
     8,
   );
   const recent = uniqueCap(sessionInterestTerms(recentSearchQueries(userId, 2)), 2);
-  const core = uniqueCap([...longTerm, ...recent], 8);
+  // 近期检索表达当前任务目标，优先参与“猜你喜欢”信号；长期兴趣仍提供广度。
+  const core = uniqueCap([...recent, ...longTerm], 8);
   return { longTerm, recent, core };
 }
 

@@ -114,7 +114,7 @@ class UnifiedMentorRetrieval:
         max_papers_per_candidate: int = 3,
         dense_threshold: float = 0.5,
         lexical_min_hits: int = 1,
-        max_fused_candidates: int = 8,
+        max_fused_candidates: int = 80,
         enable_live_paper_enrichment: bool = False,
     ) -> None:
         self._dense = dense
@@ -126,7 +126,10 @@ class UnifiedMentorRetrieval:
         # - dense_threshold：dense 余弦分数（0~1）低于此值且无 lexical 精确命中的候选丢弃，
         #   过滤"学习/数据"等泛词的语义漂移噪声。
         # - lexical_min_hits：lexical 子串命中数 ≥ 此值的候选无条件保留（精确命中是金标准）。
-        # - max_fused_candidates：融合后保留的候选上限，控制下游论文补充的实时请求量。
+        # - max_fused_candidates：在语义边界过滤前保留的候选上限。不能过早截为
+        #   8：短而精确的 query 可能有大量 lexical 命中，先按 dense/ID 截断会把
+        #   真正的合格导师排除在边界过滤之外。默认与 lexical Top-K 对齐；最终
+        #   对用户仍只返回最多 5 位导师。
         self._dense_threshold = dense_threshold
         self._lexical_min_hits = lexical_min_hits
         self._max_fused_candidates = max_fused_candidates

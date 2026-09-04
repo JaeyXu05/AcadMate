@@ -1,7 +1,7 @@
 /**
  * 真实 RAG 导师数据接入（D 侧 service 层映射）。
  *
- * 读取 C 产出的 `paper-claw-master/data/ustc_mentor_rag.json`（完整进仓：721 导师 / 1747 证据），
+ * 读取 C 产出的 `paper-claw-master/data/ustc_mentor_rag.json`（完整进仓：972 导师 / 1969 证据），
  * 把 `CandidateMentor` 结构映射为前端契约 `AdvisorDetail`。
  *
  * 协作铁律：真实字段与前端契约不符时在 D 的 service/server 层做映射，不改 A/C 输出格式、
@@ -14,7 +14,7 @@
  * - title        source_metadata.academic_title（职称）
  * - department   department
  * - tags         research_topics
- * - papers       publications.length
+ * - papers       source_metadata.publication_total_count（缺失时回退代表作数量）
  * - matchScore   详情页无动态匹配值，缺省 0（真实匹配分仅在检索时由 A 计算）
  * - bio          由证据 extracted_fact / mentor_role / affiliation 拼接
  * - contact      homepage（RAG 无邮箱，给出主页作为唯一官方联系方式）
@@ -54,6 +54,9 @@ export interface RagMentor {
     profile_office?: string;
     profile_graduated_from?: string;
     topics_source?: number;
+    representative_publication_count?: number;
+    publication_total_count?: number;
+    publication_count_source?: string;
   };
 }
 
@@ -171,11 +174,13 @@ export function toAdvisorDetail(c: RagMentor): {
 } {
   const topics = cleanTopics(c.research_topics, c.mentor_name);
   const evidence = store.getEvidenceFor(c.candidate_id);
-  const publicationsVerified = evidence.some((item) =>
-    item.metadata?.identity_verified === true
-    && String(item.metadata?.supports_fields || '').split(',').includes('publications'),
-  );
-  const pubs = publicationsVerified && Array.isArray(c.publications) ? c.publications : [];
+  // build_rag 只把 author_match_status=confirmed 的代表论文写入 candidate；待审核
+  // 论文仅留在 evidence，不进入这里。publication_total_count 是论文平台给出的作者
+  // 总作品数，和 publications.length（入库代表作数）是两个不同口径。
+  const pubs = Array.isArray(c.publications) ? c.publications : [];
+  const sourceTotal = Number(c.source_metadata?.publication_total_count);
+  const paperCount = Number.isFinite(sourceTotal) && sourceTotal >= 0
+    ? sourceTotal : pubs.length;
 
   // 优先用 RAG 里从官网个人主页抽出的 bio（build_rag.py 的 profile_bio），
   // 缺失时回退到「身份/角色 + 方向」拼接的兜底简介。
@@ -206,7 +211,7 @@ export function toAdvisorDetail(c: RagMentor): {
     title: c.source_metadata?.academic_title ?? '',
     department: c.department ?? '',
     tags: topics,
-    papers: pubs.length,
+    papers: paperCount,
     matchScore: 0,
     bio,
     contact,
@@ -226,17 +231,15 @@ export function toLightAdvisor(c: RagMentor): {
   papers: number;
   matchScore: number;
 } {
-  const publicationsVerified = store.getEvidenceFor(c.candidate_id).some((item) =>
-    item.metadata?.identity_verified === true
-    && String(item.metadata?.supports_fields || '').split(',').includes('publications'),
-  );
+  const pubs = Array.isArray(c.publications) ? c.publications : [];
+  const sourceTotal = Number(c.source_metadata?.publication_total_count);
   return {
     id: c.candidate_id,
     name: c.mentor_name,
     title: c.source_metadata?.academic_title ?? '',
     department: c.department ?? '',
     tags: cleanTopics(c.research_topics, c.mentor_name),
-    papers: publicationsVerified && Array.isArray(c.publications) ? c.publications.length : 0,
+    papers: Number.isFinite(sourceTotal) && sourceTotal >= 0 ? sourceTotal : pubs.length,
     matchScore: 0,
   };
 }

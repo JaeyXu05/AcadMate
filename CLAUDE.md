@@ -14,11 +14,11 @@
 
 ## 关键数据事实
 
-- **RAG 库**：`paper-claw-master/data/ustc_mentor_rag.json` — 715 导师 / 1580 证据，已构建成功。
-  - candidate 字段：`candidate_id` / `mentor_name` / `department` / `research_topics`（仅 500/715）/
+- **RAG 库**：`paper-claw-master/data/ustc_mentor_rag.json` — 972 位已核验导师 / 1969 条证据，2026-09-03 人工复核后重建。
+  - candidate 字段：`candidate_id` / `mentor_name` / `department` / `research_topics`（668/972）/
     `publications` / `homepage` / `recruitment_status` / `source_metadata.academic_title`（职称）。
   - candidate 与后端 schema 对齐（`backend/mentor_workflow/schemas.py` 的 `CandidateMentor`/`EvidenceRecord`）。
-- **星图数据**：`cloud3d/cloud_data.json` — 715 节点，由 `cloud3d/build_cloud.py` 从 RAG 生成，
+- **星图数据**：`cloud3d/cloud_data.json` — 独立的 715 节点历史快照；当前未随 972 人 RAG 扩容，
   含 `candidate_id/name/department/domain/color/lum/size/x/y/z/topics/pubs/homepage/recruitment`。
   通过 `candidate_id` 与 RAG、前端 Advisor.id 关联。
 - **前端契约**：`Code/src/types/` 定义 `Advisor`/`CloudNode`/`AdvisorDetail` 等；D 已在
