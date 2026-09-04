@@ -242,14 +242,16 @@ class QueryConcept(BaseModel):
 
 class QueryContract(BaseModel):
     raw_query: str = ""
+    semantic_query: str = ""
     canonical_query: str = ""
     must_preserve: list[str] = Field(default_factory=list)
     expanded_terms: list[str] = Field(default_factory=list)
     excluded_generalizations: list[str] = Field(default_factory=list)
     semantic_boundary: str | None = None
+    semantic_boundaries: list[str] = Field(default_factory=list)
     concepts: list[QueryConcept] = Field(default_factory=list)
     logic: str = "OR"
-    version: int = 2
+    version: int = 3
 
 
 class IntentPacket(BaseModel):

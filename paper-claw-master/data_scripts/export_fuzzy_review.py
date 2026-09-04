@@ -26,6 +26,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAW = REPO_ROOT / "data" / "ustc_mentors_raw.json"
+DEFAULT_OVERRIDES = REPO_ROOT / "data" / "manual_overrides.json"
 
 # 平台配置：文件路径、非精确命中的字段名、命名字段前缀、平台中文名。
 _SOURCES: list[dict] = [
@@ -103,6 +104,7 @@ def main() -> None:
     )
     parser.add_argument("--md", type=Path, default=REPO_ROOT / "data" / "fuzzy_review.md")
     parser.add_argument("--json", type=Path, default=REPO_ROOT / "data" / "fuzzy_review.json")
+    parser.add_argument("--manual-overrides", type=Path, default=DEFAULT_OVERRIDES)
     args = parser.parse_args()
 
     if not args.raw.exists():
@@ -113,6 +115,11 @@ def main() -> None:
         r["faculty_id"]: r
         for r in json.loads(args.raw.read_text(encoding="utf-8")).get("records", [])
     }
+    manual_overrides = {}
+    if args.manual_overrides.exists():
+        loaded = json.loads(args.manual_overrides.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            manual_overrides = loaded
 
     # 决定用哪些 papers 源。
     if args.papers:
@@ -130,18 +137,19 @@ def main() -> None:
         print("无可用 papers JSON，请先运行论文抓取脚本")
         return
 
-    # 收集所有 facutly_id 跨平台出现在模糊命中中的。
+    # 所有尚未人工裁决的作者实体都要复核；exact_match 只是姓名相等，不能免审。
     all_ids: set[str] = set()
     papers_by_source: dict[str, dict[str, dict]] = {}
     for src in sources:
         recs = _load_papers(src["path"])
         papers_by_source[src["label"]] = recs
         for fid, rec in recs.items():
-            if rec.get(src["fuzzy_field"]) is False:
+            mentor_override = manual_overrides.get(str(fid), {})
+            if rec.get("papers") and src["label"] not in mentor_override:
                 all_ids.add(fid)
 
     if not all_ids:
-        print("所有平台均无模糊命中导师，无需导出")
+        print("所有平台作者实体均已裁决，无需导出")
         return
 
     # 按 name 排序。
@@ -162,12 +170,15 @@ def main() -> None:
         }
         for src in sources:
             pr = papers_by_source[src["label"]].get(fid)
-            if pr is None or not pr.get(src["fuzzy_field"]) is False:
+            if pr is None or not pr.get("papers"):
+                continue
+            if src["label"] in manual_overrides.get(str(fid), {}):
                 continue
             rec["platforms"][src["label"]] = {
                 "display_name": pr.get(src["display_name"]),
                 "author_id": pr.get(src["author_id"]),
                 "works_count": pr.get(src["works_count"]),
+                "name_exact_match": pr.get(src["fuzzy_field"]) is True,
                 "papers": [
                     {
                         "year": p.get("year"),
@@ -187,10 +198,10 @@ def main() -> None:
     # Markdown 对照表。
     num_platforms = len(sources)
     lines: list[str] = [
-        "# 多平台模糊命中人工裁决对照表",
+        "# 多平台作者实体待审对照表",
         "",
-        f"共 {len(records)} 位导师在至少一个平台上因作者仅模糊命中（display_name 非精确匹配），"
-        "存在同名歧义风险。请逐人核对 官网方向 vs 各平台命中论文 后填 verdict：",
+        f"共 {len(records)} 位导师在至少一个平台上存在尚未裁决的作者实体。"
+        "姓名精确相等也不能证明是同一人；请逐人核对机构、主页作者 ID、ORCID 与论文方向后填 verdict：",
         "`keep`（论文归属本人）/ `drop`（同名错配，丢弃）/ `uncertain`（需更多信息）。",
         f"平台：{'、'.join(s['label'] for s in sources)}。",
         "",
@@ -256,7 +267,7 @@ def main() -> None:
             if src["label"] in rec["platforms"]:
                 platform_breakdown[src["label"]] = platform_breakdown.get(src["label"], 0) + 1
     print(
-        f"导出 {len(records)} 位模糊命中导师 -> {args.md} + {args.json}"
+        f"导出 {len(records)} 位作者实体待审导师 -> {args.md} + {args.json}"
     )
     for label, cnt in platform_breakdown.items():
         print(f"  {label}: {cnt}")

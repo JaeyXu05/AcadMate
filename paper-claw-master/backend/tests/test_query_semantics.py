@@ -64,3 +64,21 @@ def test_raw_query_overrides_model_topic_collapse():
     assert contract.canonical_query == "生成式人工智能"
     assert contract.must_preserve == ["生成式"]
     assert "人工智能" in contract.excluded_generalizations
+
+
+def test_explicit_or_is_preserved_in_contract():
+    contract = build_query_contract("推荐系统或信息检索", ["推荐系统", "信息检索"])
+    assert contract.logic == "OR"
+    assert [item.canonical for item in contract.concepts] == ["推荐系统", "信息检索"]
+
+
+def test_explicit_and_remains_required_intersection():
+    contract = build_query_contract("计算机视觉和多模态生成")
+    assert contract.logic == "AND"
+    assert len(contract.concepts) == 2
+
+
+def test_query_contract_records_all_family_boundaries():
+    contract = build_query_contract("图神经网络和推荐系统")
+    assert contract.semantic_boundary == "multi_concept"
+    assert set(contract.semantic_boundaries) == {"graph_learning", "recommender_systems"}

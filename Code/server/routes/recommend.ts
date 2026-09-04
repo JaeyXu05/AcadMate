@@ -2,8 +2,16 @@ import { Router, Response } from 'express';
 import { getDb } from '../db';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { ragStore, toLightAdvisor } from '../data/ragAdvisors';
-import { retrieveQualifiedMentors } from '../data/mentorRetrieval';
+import { isTrustedTopicSource, retrieveQualifiedMentors } from '../data/mentorRetrieval';
 import { loadRecommendMemory } from '../data/userMemory';
+import {
+  buildRecommendSignals,
+  hasTrustedTopicProvenance,
+  rankRecommendationMatches,
+  recommendationExplanation,
+  recommendationLimit,
+  selectDiverseRecommendations,
+} from '../data/recommendRanking';
 
 export const recommendRouter = Router();
 
@@ -16,7 +24,8 @@ recommendRouter.get('/', (req: AuthRequest, res: Response) => {
   }
 
   const memory = loadRecommendMemory(req.userId!);
-  const basedOn = memory.core.slice(0, 8);
+  const signals = buildRecommendSignals(memory);
+  const basedOn = signals.map((signal) => signal.term);
   const favoriteIds = new Set(
     (getDb()
       .prepare('SELECT advisor_id FROM favorites WHERE user_id = ?')
@@ -31,45 +40,47 @@ recommendRouter.get('/', (req: AuthRequest, res: Response) => {
   );
 
   const candidatePool = ragStore.getCandidates().filter((item) => {
-    if (dislikedIds.has(item.candidate_id)) return false;
-    return Number(item.source_metadata?.topics_source ?? 0) === 1;
+    if (dislikedIds.has(item.candidate_id) || favoriteIds.has(item.candidate_id)) return false;
+    if (!isTrustedTopicSource(item.source_metadata?.topics_source)) return false;
+    return hasTrustedTopicProvenance(item, ragStore.getEvidenceFor(item.candidate_id));
   });
 
-  const merged = new Map<string, ReturnType<typeof retrieveQualifiedMentors>['matches'][number]>();
-  for (const keyword of basedOn) {
+  const signalMatches = [];
+  for (const signal of signals) {
     const retrieved = retrieveQualifiedMentors(
-      keyword,
+      signal.term,
       candidatePool,
       (candidateId) => ragStore.getEvidenceFor(candidateId),
       { limit: 12, threshold: 1, personalize: true },
     );
-    for (const match of retrieved.matches) {
-      const current = merged.get(match.candidate.candidate_id);
-      if (!current || match.finalScore > current.finalScore) merged.set(match.candidate.candidate_id, match);
-    }
+    signalMatches.push({ signal, matches: retrieved.matches });
   }
 
-  const ranked = [...merged.values()].filter((match) => (
-    match.matchType === 'DIRECT' || match.matchType === 'ADJACENT'
-  )).sort((left, right) => {
-    const favoriteDelta = Number(favoriteIds.has(right.candidate.candidate_id)) - Number(favoriteIds.has(left.candidate.candidate_id));
-    return favoriteDelta || right.finalScore - left.finalScore;
-  });
+  const ranked = rankRecommendationMatches(signalMatches, signals).filter((item) => (
+    item.match.matchType === 'DIRECT' || item.match.matchType === 'ADJACENT'
+  ));
+  const selected = selectDiverseRecommendations(ranked, recommendationLimit());
 
-  const result = ranked.map((match) => ({
-    ...toLightAdvisor(match.candidate),
-    matchScore: match.finalScore,
+  const result = selected.map((item) => ({
+    ...toLightAdvisor(item.match.candidate),
+    matchScore: item.match.finalScore,
     scoreKind: 'calibrated_relevance_score' as const,
-    matchType: match.matchType,
-    scoreBreakdown: match.scoreBreakdown,
-    evidence: match.evidence,
-    explanation: `相对你的核心画像（${basedOn.slice(0, 3).join('、') || '近期兴趣'}）的${match.matchType === 'DIRECT' ? '直接' : '邻近'}主题重叠，不是检索页绝对阈值。`,
+    matchType: item.match.matchType,
+    scoreBreakdown: {
+      ...item.match.scoreBreakdown,
+      profile_coverage: item.profileCoverage,
+      evidence_quality: item.evidenceQuality,
+      publication_support: item.publicationSupport,
+    },
+    evidence: item.evidence,
+    explanation: recommendationExplanation(item),
   }));
 
   res.json({
     recommendations: result,
     basedOn,
     scoreKind: 'calibrated_relevance_score',
-    memory: { longTerm: memory.longTerm, recent: memory.recent },
+    needsOnboarding: signals.length === 0,
+    memory: { longTerm: memory.longTerm, recent: memory.recent, favorite: memory.favorite },
   });
 });

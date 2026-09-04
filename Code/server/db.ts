@@ -18,7 +18,7 @@ let db: Database.Database;
 // ============================================================================
 
 /** 当前期望的 schema 版本（每新增一个迁移步骤 +1） */
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 19;
 
 const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS report_preferences (
@@ -60,8 +60,12 @@ const PRODUCTIVITY_DDL = `
       CREATE TABLE IF NOT EXISTS plans (
         id                INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id           INTEGER NOT NULL,
+        parent_plan_id    INTEGER,
         title             TEXT    NOT NULL,
         description       TEXT    NOT NULL DEFAULT '',
+        deliverable       TEXT    NOT NULL DEFAULT '',
+        acceptance_criteria TEXT  NOT NULL DEFAULT '[]',
+        sequence          INTEGER,
         status            TEXT    NOT NULL DEFAULT 'todo',
         priority          TEXT    NOT NULL DEFAULT 'medium',
         start_at          TEXT,
@@ -73,7 +77,8 @@ const PRODUCTIVITY_DDL = `
         source            TEXT    NOT NULL DEFAULT 'user',
         created_at        TEXT    DEFAULT (datetime('now','localtime')),
         updated_at        TEXT    DEFAULT (datetime('now','localtime')),
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (parent_plan_id) REFERENCES plans(id) ON DELETE SET NULL
       );
 
       CREATE INDEX IF NOT EXISTS idx_plans_user_due
@@ -96,6 +101,25 @@ const PRODUCTIVITY_DDL = `
 
       CREATE INDEX IF NOT EXISTS idx_email_outbox_status
         ON email_outbox(status, scheduled_at);
+
+      CREATE TABLE IF NOT EXISTS productivity_run_cache (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id           INTEGER NOT NULL,
+        skill_id          TEXT    NOT NULL,
+        input_fingerprint TEXT    NOT NULL,
+        run_id            TEXT,
+        status            TEXT    NOT NULL DEFAULT 'queued',
+        artifact_json     TEXT    NOT NULL DEFAULT '{}',
+        audit_json        TEXT    NOT NULL DEFAULT '{}',
+        error             TEXT,
+        created_at        TEXT    DEFAULT (datetime('now','localtime')),
+        updated_at        TEXT    DEFAULT (datetime('now','localtime')),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE(user_id, skill_id, input_fingerprint)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_productivity_run_cache_lookup
+        ON productivity_run_cache(user_id, skill_id, status, updated_at DESC);
 `;
 
 const RESEARCH_DDL = `
@@ -624,6 +648,31 @@ const MIGRATIONS: { version: number; sql: string }[] = [
     version: 16,
     sql: PAPER_SEARCH_DDL,
   },
+  {
+    version: 17,
+    sql: `
+      ALTER TABLE plans ADD COLUMN parent_plan_id INTEGER;
+      ALTER TABLE plans ADD COLUMN deliverable TEXT NOT NULL DEFAULT '';
+      ALTER TABLE plans ADD COLUMN acceptance_criteria TEXT NOT NULL DEFAULT '[]';
+      ALTER TABLE plans ADD COLUMN sequence INTEGER;
+    `,
+  },
+  { version: 18, sql: `
+    CREATE TABLE IF NOT EXISTS productivity_run_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, skill_id TEXT NOT NULL,
+      input_fingerprint TEXT NOT NULL, run_id TEXT, status TEXT NOT NULL DEFAULT 'queued',
+      artifact_json TEXT NOT NULL DEFAULT '{}', audit_json TEXT NOT NULL DEFAULT '{}', error TEXT,
+      created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT DEFAULT (datetime('now','localtime')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, skill_id, input_fingerprint)
+    );
+    CREATE INDEX IF NOT EXISTS idx_productivity_run_cache_lookup
+      ON productivity_run_cache(user_id, skill_id, status, updated_at DESC);
+  ` },
+  {
+    version: 19,
+    sql: `ALTER TABLE plans ADD COLUMN execution_notes TEXT NOT NULL DEFAULT '';`,
+  },
 ];
 
 /**
@@ -672,6 +721,11 @@ function ensureColumn(database: Database.Database, table: string, column: string
 export function ensureProductivitySchema(database: Database.Database): void {
   database.exec(PRODUCTIVITY_DDL);
   ensureColumn(database, 'plans', 'completed_at', 'completed_at TEXT');
+  ensureColumn(database, 'plans', 'parent_plan_id', 'parent_plan_id INTEGER');
+  ensureColumn(database, 'plans', 'deliverable', "deliverable TEXT NOT NULL DEFAULT ''");
+  ensureColumn(database, 'plans', 'acceptance_criteria', "acceptance_criteria TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(database, 'plans', 'sequence', 'sequence INTEGER');
+  ensureColumn(database, 'plans', 'execution_notes', "execution_notes TEXT NOT NULL DEFAULT ''");
   ensureColumn(database, 'email_outbox', 'attempt_count', 'attempt_count INTEGER NOT NULL DEFAULT 0');
   ensureColumn(database, 'email_outbox', 'last_attempt_at', 'last_attempt_at TEXT');
   ensureColumn(database, 'progress_reports', 'generation_json', "generation_json TEXT NOT NULL DEFAULT '{}'");

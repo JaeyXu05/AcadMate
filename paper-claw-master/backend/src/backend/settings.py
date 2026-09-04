@@ -91,6 +91,12 @@ class Settings(BaseSettings):
     chat_rate_limiter_requests_per_second: float | None = Field(default=None, validation_alias=AliasChoices("CHATAGENT_RATE_LIMITER_REQUESTS_PER_SECOND", "PAPER_CLAW_CHAT_RATE_LIMITER_REQUESTS_PER_SECOND"))
     chat_rate_limiter_check_every_n_seconds: float = Field(0.1, validation_alias=AliasChoices("CHATAGENT_RATE_LIMITER_CHECK_EVERY_N_SECONDS", "PAPER_CLAW_CHAT_RATE_LIMITER_CHECK_EVERY_N_SECONDS"))
     chat_rate_limiter_max_bucket_size: int = Field(10, validation_alias=AliasChoices("CHATAGENT_RATE_LIMITER_MAX_BUCKET_SIZE", "PAPER_CLAW_CHAT_RATE_LIMITER_MAX_BUCKET_SIZE"))
+    # Planning is intentionally allowed a deeper, longer reasoning window;
+    # reports use a smaller budget because they summarize already-selected facts.
+    plan_chat_max_tokens: int = Field(2200, validation_alias=AliasChoices("PAPER_CLAW_PLAN_CHAT_MAX_TOKENS", "PLAN_AGENT_MAX_TOKENS"))
+    plan_chat_timeout_seconds: int = Field(180, validation_alias=AliasChoices("PAPER_CLAW_PLAN_CHAT_TIMEOUT_SECONDS", "PLAN_AGENT_TIMEOUT_SECONDS"))
+    report_chat_max_tokens: int = Field(900, validation_alias=AliasChoices("PAPER_CLAW_REPORT_CHAT_MAX_TOKENS", "REPORT_AGENT_MAX_TOKENS"))
+    report_chat_timeout_seconds: int = Field(55, validation_alias=AliasChoices("PAPER_CLAW_REPORT_CHAT_TIMEOUT_SECONDS", "REPORT_AGENT_TIMEOUT_SECONDS"))
 
     embedding_api_key: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_API_KEY", "CHATAGENT_API_KEY", "CHAT_AGENT_API_KEY"))
     embedding_base_url: str | None = Field(default=None, validation_alias=AliasChoices("PAPER_CLAW_EMBEDDING_BASE_URL", "CHATAGENT_BASE_URL", "CHATAGENT_API_BASE", "CHATAGENT_API_BASE_URL", "CHAT_AGENT_BASE_URL"))

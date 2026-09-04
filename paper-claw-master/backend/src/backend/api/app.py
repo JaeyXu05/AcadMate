@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import ssl
 import time
+from urllib.parse import urlparse
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -18,6 +20,17 @@ logger = logging.getLogger(__name__)
 _chat_probe_cache: tuple[float, bool, str | None] = (0.0, False, "not_checked")
 
 
+def _chat_probe_client(base_url: str) -> httpx.Client:
+    # Keep readiness on the same transport profile as model-backed skills.
+    # The USTC gateway may stall when Python negotiates TLS 1.3.
+    if urlparse(base_url).hostname == "api.llm.ustc.edu.cn":
+        tls_context = ssl.create_default_context()
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.maximum_version = ssl.TLSVersion.TLSv1_2
+        return httpx.Client(verify=tls_context, trust_env=False, timeout=8.0)
+    return httpx.Client(trust_env=False, timeout=8.0)
+
+
 def _chat_readiness() -> tuple[bool, str | None]:
     """Probe the configured CHATAGENT gateway, not merely env presence."""
     global _chat_probe_cache
@@ -30,7 +43,7 @@ def _chat_readiness() -> tuple[bool, str | None]:
         _chat_probe_cache = (now, False, "not_configured")
         return False, "not_configured"
     try:
-        with httpx.Client(trust_env=False, timeout=5.0) as client:
+        with _chat_probe_client(settings.chat_base_url) as client:
             response = client.get(
                 f"{settings.chat_base_url.rstrip('/')}/models",
                 headers={"Authorization": f"Bearer {settings.chat_api_key}"},

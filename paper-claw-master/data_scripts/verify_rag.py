@@ -26,6 +26,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RAG = REPO_ROOT / "data" / "ustc_mentor_rag.json"
+DEFAULT_TRUTHSET = REPO_ROOT / "eval" / "mentor_queries.json"
+DEFAULT_QUALITY_BASELINE = REPO_ROOT / "config" / "rag_quality_baseline.json"
 
 # 严格 schema 校验：尝试 import 后端模型，失败则降级。
 _STRICT = False
@@ -304,6 +306,15 @@ _COVERAGE_BOILERPLATE = (
     "邮政编码",
     "手机版",
 )
+_COVERAGE_NAVIGATION = (
+    "总访问量", "日访问量", "网站访问量", "登录", "教学资源", "团队风采",
+    "新闻动态", "组内相册", "其他栏目", "科研进展", "招生招聘", "我的相册",
+    "教师博客", "扫描手机二维码", "欢迎您的访问",
+)
+_COVERAGE_BIBLIOGRAPHY = (
+    "et al", "doi", "journal of", "sci adv", "angew chem", "adv mater",
+    "ultramicroscopy", "pnas",
+)
 
 
 def check_coverage(candidates: list[dict], rep: Report) -> None:
@@ -328,18 +339,34 @@ def check_coverage(candidates: list[dict], rep: Report) -> None:
     if recruit_rate < 0.05:
         misses.append(f"招生信息覆盖率 {recruit_rate:.0%} 低于 5%")
 
+    def topic_is_garbage(topic: object) -> bool:
+        text = str(topic or "")
+        folded = text.casefold()
+        return (
+            any(m in text for m in _COVERAGE_BOILERPLATE)
+            or any(m in text for m in _COVERAGE_NAVIGATION)
+            or any(m in folded for m in _COVERAGE_BIBLIOGRAPHY)
+        )
+
     garbage = sum(
+        1 for c in candidates for t in (c.get("research_topics") or [])
+        if topic_is_garbage(t)
+    )
+    bio_navigation = sum(
         1
         for c in candidates
-        for t in (c.get("research_topics") or [])
-        if any(m in t for m in _COVERAGE_BOILERPLATE)
+        for line in str(c.get("source_metadata", {}).get("profile_bio") or "").splitlines()
+        if line.strip() in _COVERAGE_NAVIGATION
     )
     if garbage:
         misses.append(f"研究方向含 {garbage} 条模板残留")
+    if bio_navigation:
+        misses.append(f"简介含 {bio_navigation} 条导航残留")
 
     detail = (
         f"方向 {topics_rate:.0%}，论文 {pubs_rate:.0%}，招生 {recruit_rate:.0%}"
-        + (f"，垃圾 {garbage}" if garbage else "")
+        + (f"，方向垃圾 {garbage}" if garbage else "")
+        + (f"，简介导航 {bio_navigation}" if bio_navigation else "")
     )
     if misses:
         rep.add_warn("E. 覆盖率门禁", "；".join(misses) + f"（{detail}）")
@@ -349,6 +376,12 @@ def check_coverage(candidates: list[dict], rep: Report) -> None:
 
 def check_retrieval_quality(rag_path: Path, rep: Report) -> None:
     """可证伪检索门禁：垃圾查询不得入榜；词法命中才算内部召回。"""
+    # 直接执行本脚本时 sys.path[0] 是 data_scripts/，而 ``data_scripts``
+    # 作为包需要其父目录在搜索路径中；补齐后该检查不再无故 SKIP。
+    for path in (REPO_ROOT, REPO_ROOT / "backend" / "src"):
+        as_text = str(path)
+        if as_text not in sys.path:
+            sys.path.insert(0, as_text)
     try:
         from data_scripts.internal_mentor_rag import FileInternalMentorRag
         from backend.mentor_workflow.schemas import IntentPacket, MentorGoal
@@ -399,9 +432,93 @@ def check_retrieval_quality(rag_path: Path, rep: Report) -> None:
     rep.add("F. 检索质量", ok, detail)
 
 
+def check_provenance(candidates: list[dict], evidence: list[dict], rep: Report) -> None:
+    """Hard invariants: pending paper leads can never become mentor facts."""
+    profile_backfill = [
+        e.get("evidence_id") for e in evidence
+        if e.get("source_type") == "ustc_official_faculty_profile"
+        and e.get("metadata", {}).get("topics_backfilled") is True
+    ]
+    unverified_paper_facts = [
+        e.get("evidence_id") for e in evidence
+        if any(field in str(e.get("metadata", {}).get("supports_fields", ""))
+               for field in ("research_topics", "methods", "publications"))
+        and "paper" in str(e.get("source_type", "")).casefold()
+        and e.get("metadata", {}).get("identity_verified") is not True
+    ]
+    leaked_methods = [
+        c.get("candidate_id") for c in candidates
+        if c.get("methods") and c.get("source_metadata", {}).get("methods_verified") is not True
+    ]
+    legacy_untrusted_topics = [
+        c.get("candidate_id") for c in candidates
+        if int(c.get("source_metadata", {}).get("topics_source") or 0) == 2
+    ]
+    errors = profile_backfill + unverified_paper_facts + leaked_methods + legacy_untrusted_topics
+    rep.add(
+        "G. 证据溯源硬门禁",
+        not errors,
+        f"官网伪回填 {len(profile_backfill)}，未核验论文事实 {len(unverified_paper_facts)}，"
+        f"未核验 methods 泄漏 {len(leaked_methods)}，旧 source=2 方向 {len(legacy_untrusted_topics)}",
+    )
+
+
+def check_truthset_anchors(evidence: list[dict], rep: Report, truthset: Path) -> None:
+    if not truthset.exists():
+        rep.add("H. 真值集证据锚", False, f"缺少 {truthset}")
+        return
+    spec = json.loads(truthset.read_text(encoding="utf-8"))
+    official = [
+        row for row in evidence
+        if row.get("source_type") == "ustc_official_faculty_profile"
+        and row.get("metadata", {}).get("identity_verified") is True
+    ]
+    missing: list[str] = []
+    for query in spec.get("queries", []):
+        for anchor in query.get("evidence_anchors", []):
+            matched = any(
+                row.get("candidate_id") == anchor.get("candidate_id")
+                and row.get("source_uri") == anchor.get("source_uri")
+                and all(
+                    token.strip() in str(row.get("extracted_fact", ""))
+                    for token in str(anchor.get("assertion", "")).split("；")
+                    if token.strip()
+                )
+                for row in official
+            )
+            if not matched:
+                missing.append(f"{query.get('id')}:{anchor.get('candidate_id')}")
+    rep.add("H. 真值集证据锚", not missing, f"缺失/漂移 {len(missing)}" + (f"：{missing[:5]}" if missing else ""))
+
+
+def check_quality_baseline(candidates: list[dict], evidence: list[dict], rep: Report, baseline_path: Path) -> None:
+    pending = sum(
+        e.get("metadata", {}).get("identity_review_status") == "pending"
+        for e in evidence
+    )
+    trusted_topics = sum(
+        int(c.get("source_metadata", {}).get("topics_source") or 0) in {1, 3}
+        for c in candidates
+    )
+    if not baseline_path.exists():
+        rep.add_warn("I. 可信覆盖/待审积压", f"无基线；可信方向 {trusted_topics}，待审论文实体 {pending}")
+        return
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    min_trusted = int(baseline.get("min_trusted_topic_candidates", 0))
+    max_pending_growth = int(baseline.get("max_pending_identity_records", pending))
+    ok = trusted_topics >= min_trusted and pending <= max_pending_growth
+    rep.add(
+        "I. 可信覆盖/待审积压",
+        ok,
+        f"可信方向 {trusted_topics}（最低 {min_trusted}），待审 {pending}（最高 {max_pending_growth}）",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="自检 RAG 库")
     parser.add_argument("--rag", type=Path, default=DEFAULT_RAG)
+    parser.add_argument("--truthset", type=Path, default=DEFAULT_TRUTHSET)
+    parser.add_argument("--quality-baseline", type=Path, default=DEFAULT_QUALITY_BASELINE)
     args = parser.parse_args()
 
     if not args.rag.exists():
@@ -419,6 +536,9 @@ def main() -> None:
     check_recall(candidates, evidence, rep, args.rag)
     check_coverage(candidates, rep)
     check_retrieval_quality(args.rag, rep)
+    check_provenance(candidates, evidence, rep)
+    check_truthset_anchors(evidence, rep, args.truthset)
+    check_quality_baseline(candidates, evidence, rep, args.quality_baseline)
     rep.summary()
 
 

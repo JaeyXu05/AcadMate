@@ -1,0 +1,55 @@
+{
+  "version": 3,
+  "scores": {
+    "relevance_threshold": 60,
+    "topic_calibration": 0.92,
+    "untrusted_topic_factor": 0.45,
+    "fallback_factor": 0.82,
+    "direct_relation": 100,
+    "adjacent_relation": 82
+  },
+  "query_contract": {
+    "default_logic": "OR",
+    "explicit_or_tokens": ["或", "或者", "or"],
+    "explicit_and_tokens": ["和", "与", "以及", "及", "、", "+", "and"]
+  },
+  "concept_families": [
+    {
+      "id": "generative_ai",
+      "aliases": ["生成式人工智能", "generative ai", "生成模型", "大语言模型", "大模型", "llm", "扩散模型", "diffusion model", "foundation model"],
+      "children": ["生成模型", "大语言模型", "大模型", "llm", "扩散模型", "diffusion model", "foundation model"],
+      "parents": ["人工智能", "ai", "机器学习", "machine learning", "深度学习", "deep learning"],
+      "preserve": ["生成式"]
+    },
+    {
+      "id": "recommender_systems",
+      "aliases": ["推荐系统", "recommender system", "recommendation system", "推荐算法", "协同过滤", "collaborative filtering", "排序学习", "learning to rank", "ctr预估", "点击率预估", "推荐大模型"],
+      "children": ["推荐算法", "协同过滤", "collaborative filtering", "排序学习", "learning to rank", "ctr预估", "点击率预估", "推荐大模型"],
+      "parents": ["人工智能", "ai", "机器学习", "数据科学", "大数据"],
+      "preserve": ["推荐"]
+    },
+    {
+      "id": "multimodal_generation",
+      "aliases": ["多模态生成", "multimodal generation", "文生图", "text-to-image", "视觉语言生成"],
+      "children": ["文生图", "text-to-image", "视觉语言生成"],
+      "parents": ["多模态", "multimodal", "人工智能", "机器学习"],
+      "preserve": ["多模态", "生成"]
+    },
+    {
+      "id": "multi_agent_reinforcement_learning",
+      "canonical": "multi-agent reinforcement learning",
+      "aliases": ["multi-agent reinforcement learning", "multi agent reinforcement learning", "多智能体强化学习", "marl"],
+      "children": ["multi-agent reinforcement learning", "多智能体强化学习", "marl"],
+      "parents": ["强化学习", "reinforcement learning", "人工智能", "机器学习"],
+      "preserve": ["multi-agent", "多智能体", "marl"]
+    },
+    {
+      "id": "graph_learning",
+      "canonical": "graph learning",
+      "aliases": ["图学习", "图神经网络", "graph learning", "graph neural network", "gnn"],
+      "children": ["图神经网络", "graph neural network", "gnn"],
+      "parents": ["机器学习", "machine learning", "人工智能", "ai"],
+      "preserve": ["图", "graph", "gnn"]
+    }
+  ]
+}

@@ -10,7 +10,6 @@ if not exist "%~dp0scripts\start-project.ps1" (
     exit /b 1
 )
 
-start "" "%~dp0scripts\startup-status.html"
-if not exist "%~dp0.startup-logs" mkdir "%~dp0.startup-logs"
-start "" /b powershell.exe -NoLogo -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%~dp0scripts\start-project.ps1" -LaunchOnly -NoBrowser %* >>"%~dp0.startup-logs\launcher.log" 2>&1
-exit /b 0
+rem Keep this window visible: a hidden failure is indistinguishable from a page that never opens.
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-project.ps1" -LaunchOnly -PauseOnFailure %*
+exit /b %ERRORLEVEL%

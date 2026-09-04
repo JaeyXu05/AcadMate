@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import inspect
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -106,6 +107,10 @@ class MentorSemanticIndex:
         ranked.sort(key=lambda item: (-item.score, item.candidate.candidate_id))
         return ranked[: max(1, top_k)]
 
+    def warm(self) -> None:
+        """Materialize and cache both candidate and topic matrices."""
+        self._ensure_loaded()
+
     def _ensure_loaded(self) -> None:
         if self._loaded:
             return
@@ -122,16 +127,14 @@ class MentorSemanticIndex:
             for item in payload.get("evidence", [])
             if isinstance(item, dict)
         ]
-        fingerprint = hashlib.sha256(
-            self.rag_path.read_bytes() + str(self.provider.model).encode("utf-8")
-        ).hexdigest()
-        self._candidate_matrix = self._load_cached_matrix(fingerprint)
+        fingerprint = self._fingerprint()
+        self._candidate_matrix = self._load_cached_matrix(fingerprint, "candidate")
         if self._candidate_matrix is None:
             documents = [_candidate_document(candidate) for candidate in self._candidates]
             self._candidate_matrix = _normalized_matrix(
                 self.adapter.embed_texts(self.provider, documents)
             )
-            self._save_cached_matrix(fingerprint, self._candidate_matrix)
+            self._save_cached_matrix(fingerprint, self._candidate_matrix, "candidate")
         # 额外构建「纯研究方向」候选矩阵：研究方向字段单独 embed（不含院系/论文/
         # 方法等泛词），供 search 里对方向维度单算相似度、主导排序。这样既能保留
         # 整体文档的召回覆盖，又能让"研究方向精确命中"压过"论文里偶然出现的同义词"。
@@ -140,22 +143,39 @@ class MentorSemanticIndex:
             _candidate_topic_document(candidate) for candidate in self._candidates
         ]
         if any(topic_documents):
-            self._topic_matrix = _normalized_matrix(
-                self.adapter.embed_texts(self.provider, topic_documents)
-            )
+            self._topic_matrix = self._load_cached_matrix(fingerprint, "topic")
+            if self._topic_matrix is None:
+                self._topic_matrix = _normalized_matrix(
+                    self.adapter.embed_texts(self.provider, topic_documents)
+                )
+                self._save_cached_matrix(fingerprint, self._topic_matrix, "topic")
         else:
             self._topic_matrix = None
         self._loaded = True
 
-    def _cache_path(self) -> Path | None:
+    def _fingerprint(self) -> str:
+        settings = {
+            key: self.provider.settings.get(key)
+            for key in ("pooling", "normalize", "revision", "cache_dir")
+        }
+        adapter_source = inspect.getsource(type(self.adapter)).encode("utf-8")
+        return hashlib.sha256(
+            self.rag_path.read_bytes()
+            + Path(__file__).read_bytes()
+            + adapter_source
+            + str(self.provider.model).encode("utf-8")
+            + json.dumps(settings, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+
+    def _cache_path(self, kind: str) -> Path | None:
         raw = str(self.provider.settings.get("cache_dir") or "").strip()
         if not raw:
             return None
         model = re.sub(r"[^a-zA-Z0-9_.-]+", "_", self.provider.model or "model")
-        return Path(raw) / f"paper_claw_mentor_index_{model}.npz"
+        return Path(raw) / f"paper_claw_mentor_index_{model}_{kind}.npz"
 
-    def _load_cached_matrix(self, fingerprint: str) -> np.ndarray | None:
-        path = self._cache_path()
+    def _load_cached_matrix(self, fingerprint: str, kind: str) -> np.ndarray | None:
+        path = self._cache_path(kind)
         if path is None or not path.exists():
             return None
         try:
@@ -169,8 +189,8 @@ class MentorSemanticIndex:
         except (OSError, ValueError, KeyError):
             return None
 
-    def _save_cached_matrix(self, fingerprint: str, matrix: np.ndarray) -> None:
-        path = self._cache_path()
+    def _save_cached_matrix(self, fingerprint: str, matrix: np.ndarray, kind: str) -> None:
+        path = self._cache_path(kind)
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)

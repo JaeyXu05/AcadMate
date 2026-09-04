@@ -8,6 +8,7 @@ export interface PresentationInput {
   slideCount: number;
   markdown: string;
   evidenceRefs: string[];
+  visualData?: Record<string, unknown>;
 }
 
 const builder = path.join(process.cwd(), 'server', 'services', 'ppt_builder.py');

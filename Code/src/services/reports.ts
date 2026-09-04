@@ -33,6 +33,9 @@ export interface ProgressReport {
     model?: string;
     base_host?: string;
   };
+  evidence_summary?: string;
+  is_stale?: boolean;
+  newer_records_count?: number;
   created_at: string;
 }
 
