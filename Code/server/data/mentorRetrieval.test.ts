@@ -81,6 +81,26 @@ test('narrow queries reject parent-only and unrelated candidates without filling
   assert.equal(result.matches[0].evidence.every((item) => item.candidate_id === 'generative'), true);
 });
 
+test('same direct relation retains deterministic lexical score differences', () => {
+  const result = retrieveQualifiedMentors(
+    '推荐系统',
+    [
+      mentor('focused', ['推荐系统']),
+      mentor('broad', ['推荐系统', ...Array.from({ length: 30 }, (_, index) => `topic-${index}`)]),
+    ],
+    (id) => evidence(id),
+    { limit: 5 },
+  );
+  assert.equal(result.matches.length, 2);
+  assert.equal(result.matches[0].matchType, 'DIRECT');
+  assert.equal(result.matches[1].matchType, 'DIRECT');
+  assert.notEqual(result.matches[0].finalScore, result.matches[1].finalScore);
+  assert.notEqual(
+    result.matches[0].scoreBreakdown.retrieval_signal,
+    result.matches[1].scoreBreakdown.retrieval_signal,
+  );
+});
+
 test('fallback keeps the query and lowers confidence instead of changing candidates', () => {
   const candidates = [mentor('recsys', ['推荐系统'])];
   const primary = retrieveQualifiedMentors('推荐系统', candidates, (id) => evidence(id));

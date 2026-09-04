@@ -416,6 +416,7 @@ def _enforce_query_boundary(
         meta = dict(candidate.source_metadata)
         if official_topic_support and not meta.get("topics_source"):
             meta["topics_source"] = 1
+        meta["methods_verified"] = "methods" in verified_fields
         meta["fallback"] = bool(result.used_fallback)
         candidate.source_metadata = meta
         score, match_type, breakdown = candidate_relevance(

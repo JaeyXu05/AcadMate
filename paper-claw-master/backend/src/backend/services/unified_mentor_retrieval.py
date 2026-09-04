@@ -323,6 +323,10 @@ class UnifiedMentorRetrieval:
             candidate.model_copy(
                 deep=True,
                 update={
+                    "source_metadata": {
+                        **candidate.source_metadata,
+                        "methods_verified": "methods" in verified_fields_by_candidate.get(candidate.candidate_id, set()),
+                    },
                     "methods": candidate.methods if "methods" in verified_fields_by_candidate.get(candidate.candidate_id, set()) else [],
                     "publications": candidate.publications if "publications" in verified_fields_by_candidate.get(candidate.candidate_id, set()) else [],
                     "projects": candidate.projects if "projects" in verified_fields_by_candidate.get(candidate.candidate_id, set()) else [],

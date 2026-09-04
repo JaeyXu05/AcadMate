@@ -63,11 +63,14 @@ recommendRouter.get('/', (req: AuthRequest, res: Response) => {
 
   const result = selected.map((item) => ({
     ...toLightAdvisor(item.match.candidate),
-    matchScore: item.match.finalScore,
-    scoreKind: 'calibrated_relevance_score' as const,
+    // Recommendations use the calibrated retrieval score as their base, then
+    // add deterministic profile/evidence/publication signals for personalization.
+    matchScore: item.recommendationScore,
+    scoreKind: 'personalized_recommendation' as const,
     matchType: item.match.matchType,
     scoreBreakdown: {
       ...item.match.scoreBreakdown,
+      ...item.recommendationBreakdown,
       profile_coverage: item.profileCoverage,
       evidence_quality: item.evidenceQuality,
       publication_support: item.publicationSupport,
@@ -79,7 +82,7 @@ recommendRouter.get('/', (req: AuthRequest, res: Response) => {
   res.json({
     recommendations: result,
     basedOn,
-    scoreKind: 'calibrated_relevance_score',
+    scoreKind: 'personalized_recommendation',
     needsOnboarding: signals.length === 0,
     memory: { longTerm: memory.longTerm, recent: memory.recent, favorite: memory.favorite },
   });

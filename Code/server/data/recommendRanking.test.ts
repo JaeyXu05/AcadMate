@@ -100,6 +100,20 @@ test('profile coverage and evidence quality break equal relevance ties before ca
   assert.ok(ranked[0].evidenceQuality > ranked[1].evidenceQuality);
 });
 
+test('recommendation display score includes auditable personalization signals', () => {
+  const ranked = rankRecommendationMatches([
+    { signal: recent, matches: [match('z-single'), match('a-weak', { quality: 'low' })] },
+    { signal: longTerm, matches: [match('z-single')] },
+  ], [recent, longTerm]);
+  const strongest = ranked.find((item) => item.match.candidate.candidate_id === 'z-single');
+  const weaker = ranked.find((item) => item.match.candidate.candidate_id === 'a-weak');
+  assert.ok(strongest && weaker);
+  assert.equal(strongest.recommendationBreakdown.recommendation_base_score, strongest.match.finalScore);
+  assert.equal(strongest.recommendationBreakdown.recommendation_profile_coverage, 100);
+  assert.notEqual(strongest.recommendationScore, strongest.match.finalScore);
+  assert.ok(strongest.recommendationScore > weaker.recommendationScore);
+});
+
 test('DIRECT always remains ahead of ADJACENT regardless of auxiliary quality', () => {
   const ranked = rankRecommendationMatches([
     { signal: recent, matches: [

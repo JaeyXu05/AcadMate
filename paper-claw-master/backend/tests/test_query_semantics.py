@@ -137,6 +137,21 @@ def test_dense_signal_uses_its_native_scale_without_lexical_saturation():
     assert high_score < 100
 
 
+def test_zero_dense_signal_falls_back_to_lexical_retrieve_score():
+    contract = build_query_contract("计算机视觉", ["计算机视觉"])
+    high = _candidate(["计算机视觉"])
+    low = _candidate(["计算机视觉"])
+    # Unified fusion writes dense_score=0.0 for lexical-only candidates. That
+    # marker must not hide the lexical scores that break exact-match ties.
+    high.source_metadata.update({"dense_score": 0.0, "retrieve_score": 35.0})
+    low.source_metadata.update({"dense_score": 0.0, "retrieve_score": 7.0})
+
+    high_score, _, _ = candidate_relevance(contract, high)
+    low_score, _, _ = candidate_relevance(contract, low)
+
+    assert high_score > low_score
+
+
 def test_compound_hydrogen_fuel_cell_field_is_not_split_into_hard_and():
     contract = build_query_contract("氢能与燃料电池", ["氢能与燃料电池"])
     score, match_type, _ = candidate_relevance(

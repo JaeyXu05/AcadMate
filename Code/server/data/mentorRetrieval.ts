@@ -58,6 +58,11 @@ export interface MentorMatch {
   fallback: boolean;
 }
 
+interface RetrievalVector {
+  vector: Map<string, number>;
+  text: string;
+}
+
 export interface ReviewOutcome {
   status: 'PASS' | 'NO_MATCH' | 'VETO';
   failed_checks: string[];
@@ -187,6 +192,7 @@ export function retrieveQualifiedMentors(
   const fallback = options.fallback ?? false;
   const threshold = options.threshold ?? relevanceThreshold();
   const scoreFloor = options.personalize ? threshold : relevanceThreshold();
+  const retrievalSignals = buildRetrievalSignals(query, candidates);
   const matches: MentorMatch[] = [];
   for (const candidate of candidates) {
     if (!matchesQueryFilters(query, candidate)) continue;
@@ -200,7 +206,13 @@ export function retrieveQualifiedMentors(
       });
       continue;
     }
-    const assessed = assessCandidate(query, candidate, fallback, scoreFloor);
+    const assessed = assessCandidate(
+      query,
+      candidate,
+      fallback,
+      scoreFloor,
+      retrievalSignals.get(candidate.candidate_id) ?? 0,
+    );
     if (assessed.finalScore < threshold || !['DIRECT', 'ADJACENT'].includes(assessed.matchType)) continue;
     const evidence = bindEvidence(query, candidate, evidenceFor(candidate.candidate_id), assessed.matchType);
     if (!evidence.some((item) => item.support_type === 'DIRECT' || item.support_type === 'ADJACENT')) continue;
@@ -259,7 +271,107 @@ export function reviewMatches(query: QueryContract, matches: MentorMatch[]): Rev
   };
 }
 
-function assessCandidate(query: QueryContract, candidate: RagMentor, fallback: boolean, scoreFloor = relevanceThreshold()) {
+/**
+ * Keep D's recommendation/fallback path on the same deterministic calibration
+ * scale as A's lexical retriever.  The JSON RAG candidates do not carry a
+ * per-query score, so calculate a small TF-IDF cosine signal over the current
+ * candidate pool.  It is only a bounded calibration signal; relation type
+ * remains the qualification gate.
+ */
+function buildRetrievalSignals(
+  query: QueryContract,
+  candidates: RagMentor[],
+): Map<string, number> {
+  const documents: RetrievalVector[] = candidates.map((candidate) => {
+    const text = candidateDocument(candidate);
+    return { text, vector: termVector(text) };
+  });
+  const documentFrequency = new Map<string, number>();
+  for (const item of documents) {
+    for (const token of item.vector.keys()) {
+      documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
+    }
+  }
+  const totalDocuments = Math.max(1, documents.length);
+  const idf = new Map<string, number>();
+  for (const [token, frequency] of documentFrequency) {
+    // Keep IDF positive even for common Chinese bigrams; negative weights can
+    // make a longer candidate look more similar merely because it repeats a
+    // ubiquitous token.
+    idf.set(token, Math.log((totalDocuments + 1) / (frequency + 1)) + 1);
+  }
+  const queryText = [query.canonicalQuery, ...query.expandedTerms].join(' ');
+  const queryVector = weightedVector(termVector(queryText), idf);
+  const queryTerms = [...new Set([query.canonicalQuery, ...query.expandedTerms]
+    .map(normalize)
+    .filter((term) => term.length >= 2))];
+  const signals = new Map<string, number>();
+
+  candidates.forEach((candidate, index) => {
+    const metadata = candidate.source_metadata ?? {};
+    const denseScore = Number((metadata as Record<string, unknown>).dense_score);
+    const retrieveScore = Number((metadata as Record<string, unknown>).retrieve_score);
+    let signal: number;
+    if (Number.isFinite(denseScore) && denseScore > 0) {
+      // Dense scores from A's fusion layer are already normalized to 0..1.
+      signal = denseScore;
+    } else if (Number.isFinite(retrieveScore) && retrieveScore > 0) {
+      // Lexical retrievers expose the same 0..100 score used by A.
+      signal = retrieveScore / 35;
+    } else {
+      const lexicalSimilarity = cosineSimilarity(
+        queryVector,
+        weightedVector(documents[index].vector, idf),
+      );
+      const lexicalText = normalize(documents[index].text);
+      const lexicalHits = queryTerms.filter((term) => lexicalText.includes(term)).length;
+      // Cosine is already a 0..1 signal. A small exact-term bonus mirrors the
+      // lexical hit component without allowing every direct match to saturate.
+      signal = lexicalSimilarity * 0.9 + Math.min(0.1, lexicalHits * 0.03);
+    }
+    signals.set(candidate.candidate_id, Math.max(0, Math.min(1, signal)));
+  });
+  return signals;
+}
+
+function candidateDocument(candidate: RagMentor): string {
+  return [
+    candidate.mentor_name,
+    ...(candidate.research_topics ?? []),
+    ...(candidate.methods ?? []),
+    ...(candidate.publications ?? []),
+    candidate.department ?? '',
+  ].join(' ');
+}
+
+function termVector(text: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const token of tokens(text)) counts.set(token, (counts.get(token) ?? 0) + 1);
+  const peak = Math.max(1, ...counts.values());
+  return new Map([...counts].map(([token, count]) => [token, count / peak]));
+}
+
+function weightedVector(vector: Map<string, number>, idf: Map<string, number>): Map<string, number> {
+  return new Map([...vector].map(([token, weight]) => [token, weight * (idf.get(token) ?? 0)]));
+}
+
+function cosineSimilarity(left: Map<string, number>, right: Map<string, number>): number {
+  if (!left.size || !right.size) return 0;
+  let dot = 0;
+  for (const [token, weight] of left) dot += weight * (right.get(token) ?? 0);
+  if (dot <= 0) return 0;
+  const leftNorm = Math.sqrt([...left.values()].reduce((sum, value) => sum + value * value, 0));
+  const rightNorm = Math.sqrt([...right.values()].reduce((sum, value) => sum + value * value, 0));
+  return leftNorm && rightNorm ? dot / (leftNorm * rightNorm) : 0;
+}
+
+function assessCandidate(
+  query: QueryContract,
+  candidate: RagMentor,
+  fallback: boolean,
+  scoreFloor = relevanceThreshold(),
+  retrievalSignal = 0,
+) {
   const topics = (candidate.research_topics ?? []).map(normalize);
   const methodsVerified = candidate.source_metadata?.methods_verified === true;
   const methods = methodsVerified ? (candidate.methods ?? []).map(normalize) : [];
@@ -290,7 +402,10 @@ function assessCandidate(query: QueryContract, candidate: RagMentor, fallback: b
     matchType = 'UNRELATED';
   }
   const fallbackFactor = fallback ? retrievalPolicy.scores.fallback_factor : 1;
-  const finalScore = round(topicScore * retrievalPolicy.scores.topic_calibration * fallbackFactor);
+  const boundedRetrievalSignal = Math.max(0, Math.min(1, retrievalSignal));
+  const calibrationFactor = retrievalPolicy.scores.topic_calibration
+    + (1 - retrievalPolicy.scores.topic_calibration) * boundedRetrievalSignal;
+  const finalScore = round(topicScore * calibrationFactor * fallbackFactor);
   if (finalScore < scoreFloor) matchType = matchType === 'DIRECT' || matchType === 'ADJACENT' ? 'UNRELATED' : matchType;
   return {
     finalScore,
@@ -305,6 +420,8 @@ function assessCandidate(query: QueryContract, candidate: RagMentor, fallback: b
       publication_support: 0,
       evidence_confidence: trustedChannel ? 95 : 45,
       fallback_factor: fallbackFactor,
+      retrieval_signal: round(boundedRetrievalSignal * 100),
+      calibration_factor: round(calibrationFactor, 4),
     },
   };
 }

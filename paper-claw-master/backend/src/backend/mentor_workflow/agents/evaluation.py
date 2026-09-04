@@ -52,15 +52,26 @@ class MatchingAgent:
                     intent.methods,
                     intent.application_domains,
                 )
+            methods_verified = _verified_candidate_field(candidate, ledger, "methods")
+            scoring_candidate = candidate
+            if methods_verified and candidate.source_metadata.get("methods_verified") is not True:
+                scoring_candidate = candidate.model_copy(
+                    deep=True,
+                    update={
+                        "source_metadata": {
+                            **candidate.source_metadata,
+                            "methods_verified": True,
+                        }
+                    },
+                )
             topic_match, match_type, score_breakdown = candidate_relevance(
                 contract,
-                candidate,
-                fallback=bool(candidate.source_metadata.get("fallback")),
+                scoring_candidate,
+                fallback=bool(scoring_candidate.source_metadata.get("fallback")),
             )
             if not qualifies(topic_match, match_type):
                 continue
             inferred_topic = int(candidate.source_metadata.get("topics_source") or 0) not in {1, 3}
-            methods_verified = candidate.source_metadata.get("methods_verified") is True
             dimensions = MatchDimensionScores(
                 research_topic_match=topic_match,
                 method_match=(
@@ -103,7 +114,7 @@ class MatchingAgent:
                 risks.append(
                     "Recruitment status is not verified and must not be assumed."
                 )
-            rank_score, rank_breakdown = self.rank_score(intent, candidate, dimensions)
+            rank_score, rank_breakdown = self.rank_score(intent, scoring_candidate, dimensions)
             score_breakdown = {
                 **score_breakdown,
                 **rank_breakdown,
@@ -464,6 +475,31 @@ def _match_inconsistency(
     ) != list(range(1, len(matches) + 1)):
         checks.append("ranking_consistency")
     return checks
+
+
+def _verified_candidate_field(
+    candidate: CandidateMentor, ledger: EvidenceLedger, field: str
+) -> bool:
+    """Return whether a candidate field is backed by verified evidence.
+
+    Some adapters preserve verified fields on the candidate but do not attach
+    the derived ``*_verified`` metadata flag. Derive it from the bound ledger
+    so optional method/application signals can still differentiate ranking.
+    """
+
+    if candidate.source_metadata.get(f"{field}_verified") is True:
+        return True
+    return any(
+        record is not None
+        and record.entity_verified is True
+        and field in {
+            item.strip()
+            for item in str(record.metadata.get("supports_fields", "")).split(",")
+            if item.strip()
+        }
+        for reference in candidate.evidence_refs
+        if (record := ledger.get(reference)) is not None
+    )
 
 
 def _unsupported_candidate_facts(

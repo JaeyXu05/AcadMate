@@ -246,8 +246,15 @@ function Start-Postgres([string]$Docker) {
     Stop-Startup 'PostgreSQL did not become healthy. Check Docker Desktop and the Compose logs.'
 }
 
-function Apply-Migrations([string]$Uv) {
+function Apply-Migrations([string]$Docker, [string]$Uv) {
     $migrationLog = Join-Path $LogRoot 'migration.log'
+    $alembic = Join-Path $BackendRoot '.venv\Scripts\alembic.exe'
+    if (-not (Test-Path -LiteralPath $alembic)) { Stop-Startup 'A-side Python environment is missing. Run 检查启动环境.bat first.' }
+    $versionsDir = Join-Path $BackendRoot 'migrations\versions'
+    $latestMigration = (Get-ChildItem -LiteralPath $versionsDir -Filter '*.py' -File | Sort-Object Name -Descending | Select-Object -First 1).BaseName
+    if (-not $latestMigration) { Stop-Startup 'No Alembic migration revision was found.' }
+    $currentMigration = (& $Docker compose --project-name $Config.ComposeProject -f (Join-Path $PaperRoot 'docker-compose.yml') exec -T postgres psql -U paper_claw -d paper_claw -Atc 'SELECT version_num FROM alembic_version LIMIT 1;' 2>$null).Trim()
+    if ($currentMigration -eq $latestMigration) { Write-Ok "Database migrations are current ($currentMigration)"; return }
     Write-Step 'Applying database migrations (a first database can take up to 2 minutes)'
     Write-Host "  Detailed output: $migrationLog"
     Push-Location $PaperRoot
@@ -257,7 +264,10 @@ function Apply-Migrations([string]$Uv) {
         # Alembic writes normal INFO lines to stderr.  Running it through cmd
         # prevents PowerShell's strict native-error handling from mistaking
         # those lines for a failed migration.
-        $command = "`"$Uv`" run --no-sync --project backend alembic -c backend/alembic.ini upgrade head 1>>`"$migrationLog`" 2>&1"
+        # The environment has already been verified above.  Invoke Alembic from it
+        # directly: on Windows, wrapping it in `uv run` can leave a child process
+        # alive before Alembic opens a database connection, which blocks later starts.
+        $command = "`"$alembic`" -c backend/alembic.ini upgrade head 1>>`"$migrationLog`" 2>&1"
         & $env:ComSpec /d /c $command
         $migrationExitCode = $LASTEXITCODE
         Get-Content -LiteralPath $migrationLog -Tail 80
@@ -312,13 +322,13 @@ try {
     Ensure-EnvFiles; Initialize-RuntimeConfig
     if ($LaunchOnly) {
         $tools = Ensure-Node; Test-RuntimeData $tools.Node; $tools.Uv = Ensure-Uv; $tools.Docker = Ensure-Docker; Assert-PreparedEnvironment
-        Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Uv; Start-ApplicationServices $tools
+        Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv; Start-ApplicationServices $tools
         Write-Host "`nAll core services are verified:" -ForegroundColor Green; Write-Host "  Frontend:   $($Config.FrontendUrl)"; Write-Host "  D backend:  $($Config.DHealthUrl)"; Write-Host "  A backend:  $($Config.AHealthUrl)"; Write-Host "  Logs:       $LogRoot"
         if (-not $NoBrowser) { Start-Process $Config.FrontendUrl | Out-Null }
     } else {
         Write-Step 'Checking and preparing the complete environment'; $tools = Ensure-Node; Test-RuntimeData $tools.Node; $tools.Uv = Ensure-Uv; $tools.Docker = Ensure-Docker
         if ($CheckOnly) { Write-Ok 'Basic tool/config/data check completed. Use 检查启动环境.bat for dependency installation and migrations.'; exit 0 }
-        Ensure-Dependencies $tools.Npm $tools.Uv; Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Uv
+        Ensure-Dependencies $tools.Npm $tools.Uv; Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv
         Write-Host "`nEnvironment preparation completed. Use 启动项目.bat to start and verify the application." -ForegroundColor Green
     }
     exit 0

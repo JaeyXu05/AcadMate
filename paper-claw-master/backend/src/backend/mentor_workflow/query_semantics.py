@@ -144,8 +144,17 @@ def candidate_relevance(
     # recreates the tie we are trying to remove.
     raw_dense_score = candidate.source_metadata.get("dense_score")
     try:
-        retrieval_signal = max(0.0, min(float(raw_dense_score), 1.0))
+        dense_signal = float(raw_dense_score)
     except (TypeError, ValueError):
+        dense_signal = 0.0
+    if dense_signal > 0.0:
+        # Dense cosine is already normalized to 0..1 by the fusion layer.
+        retrieval_signal = min(dense_signal, 1.0)
+    else:
+        # Lexical-only fusion explicitly records dense_score=0.0.  That value
+        # means "no dense signal", not "override the lexical signal"; keep
+        # the deterministic lexical score available to differentiate exact
+        # relation matches when the embedding index is unavailable.
         raw_retrieve_score = candidate.source_metadata.get("retrieve_score")
         try:
             retrieval_signal = max(

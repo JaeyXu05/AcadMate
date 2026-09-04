@@ -18,6 +18,9 @@ export interface RecommendMemoryInput {
 
 export interface RankedRecommendation {
   match: MentorMatch;
+  /** Personalized display score; the underlying match remains the absolute score. */
+  recommendationScore: number;
+  recommendationBreakdown: Record<string, number>;
   signals: RecommendSignal[];
   matchedTerms: string[];
   evidence: BoundEvidence[];
@@ -149,26 +152,54 @@ export function rankRecommendationMatches(
     const signals = [...item.signals.values()];
     const coverage = 100 * signals.reduce((sum, signal) => sum + signal.weight, 0) / totalWeight;
     const evidence = [...item.evidence.values()];
+    const profileCoverage = Math.round(coverage);
+    const quality = evidenceQuality(evidence);
+    const publication = publicationSupport(item.match.candidate);
+    // Keep A/D's calibrated relevance as the largest component, then blend in
+    // only auditable recommendation signals.  A weighted blend (rather than
+    // an additive score with a hard cap) preserves visible differences among
+    // high-scoring direct matches without pushing every row to 99/100.
+    const recommendationScore = round(
+      item.match.finalScore * 0.8
+        + profileCoverage * 0.12
+        + quality * 0.05
+        + publication * 0.03,
+      1,
+    );
     return {
       match: item.match,
       signals,
       matchedTerms: [...item.terms],
       evidence,
-      profileCoverage: Math.round(coverage),
-      evidenceQuality: evidenceQuality(evidence),
-      publicationSupport: publicationSupport(item.match.candidate),
+      profileCoverage,
+      evidenceQuality: quality,
+      publicationSupport: publication,
+      recommendationScore,
+      recommendationBreakdown: {
+        recommendation_base_score: round(item.match.finalScore),
+        recommendation_profile_coverage: profileCoverage,
+        recommendation_evidence_quality: quality,
+        recommendation_publication_support: publication,
+        recommendation_score: recommendationScore,
+      },
     };
   });
 
   return ranked.sort((left, right) => {
     const typeDelta = Number(right.match.matchType === 'DIRECT') - Number(left.match.matchType === 'DIRECT');
     return typeDelta
+      || right.recommendationScore - left.recommendationScore
       || right.match.finalScore - left.match.finalScore
       || right.profileCoverage - left.profileCoverage
       || right.evidenceQuality - left.evidenceQuality
       || right.publicationSupport - left.publicationSupport
       || left.match.candidate.candidate_id.localeCompare(right.match.candidate.candidate_id);
   });
+}
+
+function round(value: number, digits = 2): number {
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
 }
 
 export function recommendationLimit(raw = process.env.RECOMMEND_LIMIT): number {
