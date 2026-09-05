@@ -4,6 +4,13 @@ import { getDb } from '../db';
 import { loadGrowthState, loadTrustedAgentContext } from '../data/growthStore';
 import { postHarnessRun } from '../harnessClient';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { explainResearchProfileError, researchProfileTimeoutMs } from '../researchRuntime';
+import {
+  apiSettingsRequired,
+  getLlmApiSettings,
+  hasUsableLlmSettings,
+  saveLlmApiSettings,
+} from '../services/llmSettings';
 
 export const userRouter = Router();
 
@@ -128,8 +135,64 @@ userRouter.get('/research-profile', (req: AuthRequest, res: Response) => {
   });
 });
 
+/** GET /api/user/api-settings — 当前登录用户自己的大模型 API 配置（不回传明文 key）。 */
+userRouter.get('/api-settings', (req: AuthRequest, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const settings = getLlmApiSettings(req.userId!);
+  res.json({
+    enabled: settings.enabled,
+    base_url: settings.baseUrl,
+    model: settings.model,
+    api_key_saved: settings.apiKeySaved,
+    updated_at: settings.updatedAt,
+  });
+});
+
+/** PUT /api/user/api-settings — 保存当前用户自己的大模型 API 配置。 */
+userRouter.put('/api-settings', (req: AuthRequest, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const body = (req.body ?? {}) as {
+    enabled?: unknown;
+    base_url?: unknown;
+    model?: unknown;
+    api_key?: unknown;
+    remove_key?: unknown;
+  };
+  const current = getLlmApiSettings(req.userId!, true);
+  const enabling = body.remove_key === true
+    ? false
+    : (body.enabled === undefined ? current.enabled : Boolean(body.enabled));
+  const nextBaseUrl = body.base_url === undefined ? current.baseUrl : String(body.base_url || '').trim();
+  const nextModel = body.model === undefined ? current.model : String(body.model || '').trim();
+  const nextApiKey = body.remove_key === true
+    ? ''
+    : (body.api_key === undefined ? current.apiKey : String(body.api_key || '').trim());
+  if (enabling && (!nextBaseUrl || !nextModel || !nextApiKey)) {
+    res.status(400).json({ message: '启用前必须完整填写 API 地址、模型名称和 API Key' });
+    return;
+  }
+  const settings = saveLlmApiSettings(req.userId!, {
+    enabled: enabling,
+    baseUrl: body.base_url === undefined ? undefined : String(body.base_url || ''),
+    model: body.model === undefined ? undefined : String(body.model || ''),
+    apiKey: body.api_key === undefined ? undefined : String(body.api_key || ''),
+    removeKey: body.remove_key === true,
+  });
+  res.json({
+    enabled: settings.enabled,
+    base_url: settings.baseUrl,
+    model: settings.model,
+    api_key_saved: settings.apiKeySaved,
+    updated_at: settings.updatedAt,
+  });
+});
+
 /** POST /api/user/research-profile — 用 A 端真实模型生成证据受限的科研画像。 */
 userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => {
+  if (!hasUsableLlmSettings(req.userId!)) {
+    res.status(428).json(apiSettingsRequired('科研画像生成'));
+    return;
+  }
   const context = loadTrustedAgentContext(req.userId!);
   const signature = researchProfileSignature(context);
   try {
@@ -141,7 +204,10 @@ userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => 
         profile: context.profile,
         growth: context.growth,
       },
-    }, 28_000);
+      // Allow the same 120s provider budget as other model features plus
+      // headroom for the synchronous A-side profile call. A 28s cap caused
+      // valid slow DeepSeek responses to surface as "生成超时".
+    }, researchProfileTimeoutMs());
     const artifact = result?.artifact;
     const runStatus = String(result?.status || '');
     const reviewStatus = String(result?.review_status || artifact?.review_status || '');
@@ -167,17 +233,9 @@ userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => 
     ).run(JSON.stringify(saved), req.userId!);
     res.json({ profile: saved, stale: false });
   } catch (error) {
-    const status = Number((error as { status?: number })?.status) || 502;
-    const raw = error instanceof Error ? error.message : '科研画像生成失败';
-    let message = raw;
-    if (/model.*not set|chat_model_missing|未配置/i.test(raw)) {
-      message = '科研画像需要模型服务，请先在环境配置中填写聊天模型后再试。';
-    } else if (/未启动|无法连接|fetch failed|econnrefused/i.test(raw)) {
-      message = '科研画像服务当前未就绪，请启动 PAPERCLAW Agent 后重试；已有画像和个人资料不会丢失。';
-    } else if (/超时|timeout|aborted/i.test(raw)) {
-      message = '科研画像生成超时，本次请求已停止；已有画像和个人资料不会丢失，请稍后重试。';
-    }
-    res.status(status).json({ message });
+    const mapped = explainResearchProfileError(error, researchProfileTimeoutMs());
+    const status = Number((error as { status?: number })?.status) || (mapped.timedOut ? 504 : 502);
+    res.status(status).json({ message: mapped.message });
   }
 });
 

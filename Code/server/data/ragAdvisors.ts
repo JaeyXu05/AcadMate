@@ -14,7 +14,7 @@
  * - title        source_metadata.academic_title（职称）
  * - department   department
  * - tags         research_topics
- * - papers       source_metadata.publication_total_count（缺失时回退代表作数量）
+ * - papers       仅使用带来源的平台论文总数；缺失时省略，绝不把代表作数量当总数
  * - matchScore   详情页无动态匹配值，缺省 0（真实匹配分仅在检索时由 A 计算）
  * - bio          由证据 extracted_fact / mentor_role / affiliation 拼接
  * - contact      homepage（RAG 无邮箱，给出主页作为唯一官方联系方式）
@@ -77,6 +77,32 @@ export interface RagEvidence {
   freshness?: string;
   confidence?: number;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Return a paper total only when the RAG record identifies its provenance.
+ * `publications` is a confirmed representative-title list, not a complete
+ * publication catalogue, so its length must never be used as the UI total.
+ */
+export function reliablePublicationTotal(
+  sourceMetadata: unknown,
+  representativeCount?: number,
+): number | undefined {
+  if (!sourceMetadata || typeof sourceMetadata !== 'object') return undefined;
+  const metadata = sourceMetadata as {
+    publication_total_count?: unknown;
+    publication_count_source?: unknown;
+  };
+  const rawTotal = metadata.publication_total_count;
+  const source = String(metadata.publication_count_source ?? '').trim().toLowerCase();
+  const total = typeof rawTotal === 'number'
+    ? rawTotal
+    : typeof rawTotal === 'string' && rawTotal.trim() ? Number(rawTotal) : NaN;
+  // Zero is not a useful UI metric here: it means the source did not provide
+  // a usable total, while `publications` is only a representative list.
+  if (!Number.isInteger(total) || total <= 0 || !['openalex', 's2'].includes(source)) return undefined;
+  if (Number.isInteger(representativeCount) && (representativeCount as number) > total) return undefined;
+  return total;
 }
 
 class RagAdvisorStore {
@@ -169,7 +195,7 @@ export function toAdvisorDetail(c: RagMentor): {
   department: string;
   tags: string[];
   hIndex?: number;
-  papers: number;
+  papers?: number;
   matchScore: number;
   explanation?: string;
   bio?: string;
@@ -183,9 +209,7 @@ export function toAdvisorDetail(c: RagMentor): {
   // 论文仅留在 evidence，不进入这里。publication_total_count 是论文平台给出的作者
   // 总作品数，和 publications.length（入库代表作数）是两个不同口径。
   const pubs = Array.isArray(c.publications) ? c.publications : [];
-  const sourceTotal = Number(c.source_metadata?.publication_total_count);
-  const paperCount = Number.isFinite(sourceTotal) && sourceTotal >= 0
-    ? sourceTotal : pubs.length;
+  const paperCount = reliablePublicationTotal(c.source_metadata, pubs.length);
 
   // 优先用 RAG 里从官网个人主页抽出的 bio（build_rag.py 的 profile_bio），
   // 缺失时回退到「身份/角色 + 方向」拼接的兜底简介。
@@ -216,7 +240,7 @@ export function toAdvisorDetail(c: RagMentor): {
     title: c.source_metadata?.academic_title ?? '',
     department: c.department ?? '',
     tags: topics,
-    papers: paperCount,
+    ...(paperCount === undefined ? {} : { papers: paperCount }),
     matchScore: 0,
     bio,
     contact,
@@ -233,18 +257,18 @@ export function toLightAdvisor(c: RagMentor): {
   department: string;
   tags: string[];
   hIndex?: number;
-  papers: number;
+  papers?: number;
   matchScore: number;
 } {
   const pubs = Array.isArray(c.publications) ? c.publications : [];
-  const sourceTotal = Number(c.source_metadata?.publication_total_count);
+  const paperCount = reliablePublicationTotal(c.source_metadata, pubs.length);
   return {
     id: c.candidate_id,
     name: c.mentor_name,
     title: c.source_metadata?.academic_title ?? '',
     department: c.department ?? '',
     tags: cleanTopics(c.research_topics, c.mentor_name),
-    papers: Number.isFinite(sourceTotal) && sourceTotal >= 0 ? sourceTotal : pubs.length,
+    ...(paperCount === undefined ? {} : { papers: paperCount }),
     matchScore: 0,
   };
 }

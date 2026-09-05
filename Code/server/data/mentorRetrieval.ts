@@ -379,10 +379,17 @@ function assessCandidate(
   const assessments = concepts.map((concept) => {
     const canonical = String(concept.canonical ?? concept.surface ?? '');
     const boundary = BOUNDARIES.find((item) => item.triggers.some((term) => normalize(term) === normalize(canonical)));
-    const values = concept.role === 'METHOD' ? methods : topics;
+    // A user phrase such as "用大语言模型" is classified as a METHOD, but a
+    // mentor often states that method inside verified research_topics (for
+    // example "大语言模型（LLMs）方法及应用") rather than in a separate
+    // methods field. When no verified methods exist, fall back to topics so
+    // method-style queries still recall those mentors.
+    const isMethod = concept.role === 'METHOD';
+    const methodTopicFallback = isMethod && !methods.length;
+    const values = isMethod && !methodTopicFallback ? methods : topics;
     const singleQuery: QueryContract = { ...query, canonicalQuery: canonical, concepts: [concept] };
     const assessed = boundary ? boundaryScore(canonical, values, boundary) : overlapAssessment(singleQuery, values);
-    return { concept, assessed };
+    return { concept, assessed, methodTopicFallback };
   });
   const required = assessments.filter((item) => item.concept.required !== false);
   const considered = required.length ? required : assessments;
@@ -394,7 +401,8 @@ function assessCandidate(
     : considered.some((item) => item.assessed.type === 'DIRECT' || item.assessed.type === 'ADJACENT');
   const trustedTopics = isTrustedTopicSource(candidate.source_metadata?.topics_source);
   const methodOnly = considered.every((item) => item.concept.role === 'METHOD');
-  const trustedChannel = methodOnly ? methodsVerified : trustedTopics;
+  const methodTopicFallback = methodOnly && considered.some((item) => item.methodTopicFallback === true);
+  const trustedChannel = methodOnly ? (methodsVerified || (methodTopicFallback && trustedTopics)) : trustedTopics;
   let topicScore = chosen.assessed.score * (trustedChannel ? 1 : retrievalPolicy.scores.untrusted_topic_factor);
   let matchType = allQualifying ? chosen.assessed.type : 'UNRELATED';
   if (methodApplicationVeto(query, topics, matchType)) {

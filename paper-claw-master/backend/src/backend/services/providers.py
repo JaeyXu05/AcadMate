@@ -73,6 +73,15 @@ def embedding_provider_from_settings(settings: Settings | None = None) -> Resolv
     settings = settings or get_settings()
     if not settings.embedding_model or not settings.embedding_model.strip():
         raise ProviderResolutionError("embedding_model_missing", "PAPER_CLAW_EMBEDDING_MODEL is not set.")
+    provider_name = settings.embedding_provider.strip() or ProviderName.openai_compatible.value
+    # Embedding fields no longer alias CHATAGENT_* (see settings.py).  Keep the
+    # documented "one endpoint for chat and embeddings" behavior only for remote
+    # embedding providers by explicitly falling back to the chat credentials.
+    api_key = settings.embedding_api_key
+    base_url = settings.embedding_base_url
+    if provider_name == ProviderName.openai_compatible.value:
+        api_key = api_key or settings.chat_api_key
+        base_url = base_url or settings.chat_base_url
     provider_settings: dict[str, object] = {
         "timeout": settings.embedding_timeout_seconds,
         "max_retries": settings.embedding_max_retries,
@@ -90,10 +99,10 @@ def embedding_provider_from_settings(settings: Settings | None = None) -> Resolv
         id=0,
         name="settings-embedding",
         kind=ProviderKind.embedding.value,
-        provider=settings.embedding_provider.strip() or ProviderName.openai_compatible.value,
-        base_url=settings.embedding_base_url,
+        provider=provider_name,
+        base_url=base_url,
         model=settings.embedding_model,
-        api_key=settings.embedding_api_key,
+        api_key=api_key,
         settings=provider_settings,
     )
 

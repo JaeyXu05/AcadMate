@@ -6,6 +6,7 @@ import {
   type ReviewedGrowthWrite,
 } from './data/growthStore';
 import { saveRunArtifact } from './data/runArtifacts';
+import { attachLlmOverrides } from './services/llmSettings';
 
 export function agentBase(): string {
   return String(process.env.MENTOR_AGENT_BASE_URL || '').replace(/\/+$/, '');
@@ -143,6 +144,8 @@ export async function postHarnessRun(body: Record<string, unknown>, timeoutMs = 
     (err as Error & { status?: number }).status = 503;
     throw err;
   }
+  const context = (body?.context ?? {}) as { user_id?: unknown };
+  attachLlmOverrides(body, context.user_id);
   let runRes: Response;
   try {
     runRes = await fetch(agentUrl('/api/runs'), {

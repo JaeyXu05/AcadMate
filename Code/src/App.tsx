@@ -1,11 +1,11 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { ConfigProvider, theme, App as AntdApp } from 'antd';
 import AppLayout from './components/AppLayout';
 import GuestGuard from './components/GuestGuard';
 import AuthGuard from './components/AuthGuard';
 import { useAuthStore } from './stores/authStore';
-import { SESSION_EXPIRED_EVENT, API_NOTICE_EVENT } from './services/axios';
+import { API_SETTINGS_REQUIRED_EVENT, SESSION_EXPIRED_EVENT, API_NOTICE_EVENT } from './services/axios';
 
 const WelcomePage = lazy(() => import('./pages/WelcomePage'));
 const SearchPage = lazy(() => import('./pages/SearchPage'));
@@ -13,6 +13,7 @@ const CloudPage = lazy(() => import('./pages/CloudPage'));
 const OtherPage = lazy(() => import('./pages/OtherPage'));
 const ProfilePage = lazy(() => import('./pages/ProfilePage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const ApiSettingsPage = lazy(() => import('./pages/ApiSettingsPage'));
 const FavoritesPage = lazy(() => import('./pages/FavoritesPage'));
 const AdvisorDetailPage = lazy(() => import('./pages/AdvisorDetailPage'));
 const EmailPage = lazy(() => import('./pages/EmailPage'));
@@ -26,7 +27,8 @@ const SkillsPage = lazy(() => import('./pages/SkillsPage'));
 const IntegrationsPage = lazy(() => import('./pages/IntegrationsPage'));
 
 function AppRoutes() {
-  const { message: antdMessage } = AntdApp.useApp();
+  const { message: antdMessage, modal } = AntdApp.useApp();
+  const apiSettingsPromptOpen = useRef(false);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const logout = useAuthStore((s) => s.logout);
   const navigate = useNavigate();
@@ -55,6 +57,24 @@ function AppRoutes() {
     window.addEventListener(API_NOTICE_EVENT, onNotice);
     return () => window.removeEventListener(API_NOTICE_EVENT, onNotice);
   }, [antdMessage]);
+
+  useEffect(() => {
+    const onRequired = (event: Event) => {
+      if (apiSettingsPromptOpen.current) return;
+      apiSettingsPromptOpen.current = true;
+      const detail = (event as CustomEvent<{ message?: string; path?: string }>).detail;
+      modal.confirm({
+        title: '需要配置模型 API',
+        content: detail?.message || '此功能需要模型 API，请先为当前账号填写 API 设置。',
+        okText: '前往 API 设置',
+        cancelText: '暂不配置',
+        onOk: () => navigate(detail?.path || '/api-settings'),
+        afterClose: () => { apiSettingsPromptOpen.current = false; },
+      });
+    };
+    window.addEventListener(API_SETTINGS_REQUIRED_EVENT, onRequired);
+    return () => window.removeEventListener(API_SETTINGS_REQUIRED_EVENT, onRequired);
+  }, [modal, navigate]);
 
   return (
     <Suspense
@@ -87,6 +107,7 @@ function AppRoutes() {
           <Route path="/other" element={<OtherPage />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/api-settings" element={<ApiSettingsPage />} />
           <Route path="/favorites" element={<FavoritesPage />} />
           <Route path="/advisor/:id" element={<AdvisorDetailPage />} />
           <Route path="/email" element={<EmailPage />} />

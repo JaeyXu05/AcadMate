@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildQueryContract, keepDisplayableAdvisors, longTermInterestTerms, retrieveQualifiedMentors, reviewMatches } from './mentorRetrieval';
-import { ragStore } from './ragAdvisors';
+import { ragStore, reliablePublicationTotal, toLightAdvisor } from './ragAdvisors';
 import type { RagEvidence, RagMentor } from './ragAdvisors';
 
 function mentor(id: string, topics: string[], topicsSource = 1): RagMentor {
@@ -34,6 +34,32 @@ function evidence(id: string): RagEvidence[] {
     },
   ];
 }
+
+test('paper count only uses an explicitly sourced total, never representative titles', () => {
+  assert.equal(
+    reliablePublicationTotal({ publication_total_count: 73, publication_count_source: 'openalex' }, 17),
+    73,
+  );
+  assert.equal(
+    reliablePublicationTotal({ publication_total_count: 17 }, 17),
+    undefined,
+  );
+  assert.equal(
+    reliablePublicationTotal({ publication_total_count: 3, publication_count_source: 's2' }, 5),
+    undefined,
+  );
+  assert.equal(
+    reliablePublicationTotal({ publication_total_count: 0, publication_count_source: 'openalex' }),
+    undefined,
+  );
+  const advisor = toLightAdvisor({
+    candidate_id: 'without-total',
+    mentor_name: '无总数导师',
+    publications: ['代表作 A', '代表作 B'],
+    source_metadata: {},
+  });
+  assert.equal('papers' in advisor, false);
+});
 
 test('query contract preserves recommendation and generative qualifiers', () => {
   assert.equal(buildQueryContract('推荐系统').canonicalQuery, '推荐系统');

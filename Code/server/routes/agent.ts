@@ -21,7 +21,8 @@ import {
 import { persistUploadedPdf, loadResearchDocument } from '../data/researchDocuments';
 import { cleanTopics } from '../data/topicBoilerplate';
 import { getDb } from '../db';
-import { ragStore, ragData, toLightAdvisor } from '../data/ragAdvisors';
+import { apiSettingsRequired, getLlmApiSettings, hasUsableLlmSettings } from '../services/llmSettings';
+import { ragStore, ragData, reliablePublicationTotal, toLightAdvisor } from '../data/ragAdvisors';
 import { retrieveQualifiedMentors, reviewMatches, relevanceThreshold, keepDisplayableAdvisors, longTermInterestTerms } from '../data/mentorRetrieval';
 import { extractPdfPages, extractPdfText } from './pdfText';
 import { reconcileProgressReport } from './reports';
@@ -237,9 +238,10 @@ function mapFinalMentor(m: any, index: number): any {
   const candidate = m?.candidate ?? {};
   const match = m?.match ?? {};
   const candidateEvidence: any[] = Array.isArray(m?.evidence) ? m.evidence : [];
-  // C 侧只把已确认作者的代表作写入 candidate；论文总数使用来源平台的独立口径。
+  // C 侧只把已确认作者的代表作写入 candidate；只有带来源的平台总数
+  // 才能作为论文数，不能回退到代表作列表长度。
   const pubList: unknown[] = Array.isArray(candidate.publications) ? candidate.publications : [];
-  const sourcePublicationTotal = Number(candidate.source_metadata?.publication_total_count);
+  const sourcePublicationTotal = reliablePublicationTotal(candidate.source_metadata, pubList.length);
   const evidenceRefs = [
     ...(Array.isArray(candidate.evidence_refs) ? candidate.evidence_refs : []),
     ...(Array.isArray(match.evidence_refs) ? match.evidence_refs : []),
@@ -261,8 +263,7 @@ function mapFinalMentor(m: any, index: number): any {
     tags: cleanTopics(
       Array.isArray(candidate.research_topics) ? candidate.research_topics : [],
     ),
-    papers: Number.isFinite(sourcePublicationTotal) && sourcePublicationTotal >= 0
-      ? sourcePublicationTotal : pubList.length,
+    ...(sourcePublicationTotal === undefined ? {} : { papers: sourcePublicationTotal }),
     publications: pubList,
     // Preserve one decimal place from A's calibrated score.  Integer rounding
     // collapsed distinct evidence/retrieval signals (for example 97.9 and
@@ -789,10 +790,18 @@ async function proxyToPaperClawChat(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), agentTimeoutMs());
   try {
+    const userLlm = getLlmApiSettings(userId, true);
+    const userModelOverrides = userLlm.enabled && userLlm.baseUrl && userLlm.model && userLlm.apiKey
+      ? { model: userLlm.model, api_key: userLlm.apiKey, base_url: userLlm.baseUrl }
+      : {};
     const upstream = await fetch(agentUrl('/api/agent/messages/stream'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, metadata: { surface: 'search', owner_id: String(userId) } }),
+      body: JSON.stringify({
+        message,
+        ...userModelOverrides,
+        metadata: { surface: 'search', owner_id: String(userId) },
+      }),
       signal: controller.signal,
     });
     if (!upstream.ok || !upstream.body) return { ok: false, error: `PAPERCLAW Agent 调用失败（HTTP ${upstream.status}）` };
@@ -872,6 +881,11 @@ agentRouter.post('/chat', (req: AuthRequest, res: Response) => {
 
   (async () => {
     if (!resume_trace_id && shouldUsePlainConversation(message)) {
+      if (!hasUsableLlmSettings(userId)) {
+        sse(res, 'error', { type: 'error', ...apiSettingsRequired('智能对话') });
+        res.end();
+        return;
+      }
       sse(res, 'thinking', { type: 'thinking', content: '先正常聊聊，不启动导师检索。' });
       const plain = await proxyToPaperClawChat(userId, message, (text) => {
         if (!aborted.cancelled && text) sse(res, 'summary', { type: 'summary', content: text });
@@ -1102,6 +1116,10 @@ agentRouter.post('/read', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ message: '请提供 candidate_id' });
     return;
   }
+  if (!hasUsableLlmSettings(req.userId!)) {
+    res.status(428).json(apiSettingsRequired('论文智能阅读'));
+    return;
+  }
   try {
     const result = await runHarnessSkill({
       userId: req.userId!,
@@ -1157,6 +1175,11 @@ agentRouter.post('/paper-upload', paperUpload.single('file'), async (req: AuthRe
   if (!candidateId) {
     await fs.promises.unlink(file.path).catch(() => {});
     res.status(400).json({ message: '请提供 candidate_id' });
+    return;
+  }
+  if (!req.body?.paper_id && !hasUsableLlmSettings(req.userId!)) {
+    await fs.promises.unlink(file.path).catch(() => {});
+    res.status(428).json(apiSettingsRequired('论文智能阅读'));
     return;
   }
   if (!agentBase()) {

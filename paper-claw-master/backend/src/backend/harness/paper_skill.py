@@ -27,7 +27,7 @@ _SENTENCE_RE = re.compile(r"(?<=[。！？!?；;\n])")
 
 def start_paper_qa(request: RunCreate, session: Session) -> RunCreated:
     settings = get_settings()
-    if not (settings.chat_model and str(settings.chat_model).strip()):
+    if not (settings.chat_model and str(settings.chat_model).strip()) and not request.llm_model:
         raise ValueError("PAPER_CLAW_CHAT_MODEL is not set")
     candidate_id = request.context.candidate_id or ""
     mentor = _load_mentor(candidate_id)
@@ -79,6 +79,9 @@ def start_paper_qa(request: RunCreate, session: Session) -> RunCreated:
             "query": query,
             "retrieve_error": retrieve_error,
         },
+        model=request.llm_model,
+        api_key=request.llm_api_key,
+        base_url=request.llm_base_url,
     )
     if not preview:
         response = submit_agent_message(session, agent_request)

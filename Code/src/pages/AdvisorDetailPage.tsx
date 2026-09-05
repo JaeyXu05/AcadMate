@@ -159,10 +159,12 @@ function AdvisorDetailPage() {
       {/* 指标 */}
       <div className={styles.section}>
         <div className={styles.metricGrid}>
-          <div className={styles.metricCell}>
-            <div className={styles.metricCellLabel}>论文数</div>
-            <div className={styles.metricCellValue}>{advisor.papers}</div>
-          </div>
+          {typeof advisor.papers === 'number' && Number.isFinite(advisor.papers) && advisor.papers > 0 && (
+            <div className={styles.metricCell}>
+              <div className={styles.metricCellLabel}>论文数</div>
+              <div className={styles.metricCellValue}>{advisor.papers}</div>
+            </div>
+          )}
           <div className={styles.metricCell}>
             <div className={styles.metricCellLabel}>MATCH SCORE</div>
             <div className={styles.metricCellValue}>

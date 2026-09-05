@@ -79,7 +79,13 @@ export async function getResearchProfile(): Promise<ResearchProfileResponse> {
 }
 
 export async function generateResearchProfile(): Promise<ResearchProfileResponse> {
-  const data = (await api.post<ResearchProfileResponse>('/user/research-profile')).data;
+  const data = (await api.post<ResearchProfileResponse>(
+    '/user/research-profile',
+    undefined,
+    // Model-backed profile generation may take over a minute on a reasoning
+    // model; do not let the axios 30s default turn it into a false timeout.
+    { timeout: 300000 },
+  )).data;
   return { profile: normalizeResearchProfile(data?.profile), stale: Boolean(data?.stale) };
 }
 
@@ -126,6 +132,30 @@ export async function getSettings(): Promise<ServerSettings> {
 /** 更新用户设置 */
 export async function updateSettings(settings: Partial<ServerSettings>): Promise<ServerSettings> {
   const { data } = await api.put<ServerSettings>('/settings', settings);
+  return data;
+}
+
+export interface UserApiSettings {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  api_key_saved: boolean;
+  updated_at?: string;
+}
+
+export async function getUserApiSettings(): Promise<UserApiSettings> {
+  const { data } = await api.get<UserApiSettings>('/user/api-settings');
+  return data;
+}
+
+export async function updateUserApiSettings(input: {
+  enabled?: boolean;
+  base_url?: string;
+  model?: string;
+  api_key?: string;
+  remove_key?: boolean;
+}): Promise<UserApiSettings> {
+  const { data } = await api.put<UserApiSettings>('/user/api-settings', input);
   return data;
 }
 

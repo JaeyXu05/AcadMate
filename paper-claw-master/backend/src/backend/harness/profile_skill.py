@@ -19,8 +19,8 @@ from sqlalchemy.orm import Session
 from backend.db.repositories import AgentRunRepository
 from backend.db.types import RunStatus, WorkflowName
 from backend.harness.contracts import RunCreate, RunCreated
+from backend.harness.provider_overrides import provider_for_run
 from backend.integrations.llm.openai_compatible import OpenAICompatibleChatModelAdapter
-from backend.services.providers import chat_provider_from_settings
 from backend.settings import get_settings
 
 ResearchLevel = Literal[
@@ -90,7 +90,7 @@ def start_profile_analyze(request: RunCreate, session: Session) -> RunCreated:
         )
 
     try:
-        draft, generation = _generate_profile(snapshot, allowed_refs)
+        draft, generation = _generate_profile(snapshot, allowed_refs, request)
         draft = _restrict_evidence(
             draft,
             set(allowed_refs),
@@ -213,15 +213,30 @@ def _source_packet(profile: dict[str, Any], growth: dict[str, Any]) -> tuple[dic
     }, list(dict.fromkeys(allowed))
 
 
-def _generate_profile(snapshot: dict[str, Any], allowed_refs: list[str]) -> tuple[ResearchProfileDraft, dict[str, Any]]:
+def _generate_profile(
+    snapshot: dict[str, Any],
+    allowed_refs: list[str],
+    request: RunCreate,
+) -> tuple[ResearchProfileDraft, dict[str, Any]]:
     settings = get_settings()
-    provider = chat_provider_from_settings(settings).model_copy(deep=True)
+    provider = provider_for_run(request).model_copy(deep=True)
     provider.settings = {
         **provider.settings,
-        "max_tokens": min(settings.chat_max_tokens, 1800),
-        "timeout": min(float(provider.settings.get("timeout") or 22), 22),
+        "max_tokens": min(settings.chat_max_tokens, 1400),
+        # The DeepSeek-class model can spend 20-60s producing a structured
+        # profile.  The old 22s cap turned valid slow responses into false
+        # timeouts, so keep the provider-configured budget (120s by default)
+        # instead of inventing a shorter local ceiling.
+        "timeout": float(provider.settings.get("timeout") or settings.chat_timeout_seconds),
+        # Do not retry a synchronous profile call: a retry doubles the visible
+        # wait on a broken gateway. The user can explicitly start it again.
         "max_retries": 0,
         "response_format": {"type": "json_object"},
+        # DeepSeek v4 defaults to emitting a long reasoning_content before the
+        # JSON; when reasoning exhausts the token budget, content stays empty
+        # and structural validation fails. The profile task is a bounded JSON
+        # generation, so disable hidden thinking for a stable structured reply.
+        "extra_body": {"thinking": {"type": "disabled"}},
     }
     system = """
 你是科研画像 Agent。你的任务是把用户自述与平台已审核记录组织成自然、克制、可行动的中文科研画像。
@@ -256,7 +271,7 @@ def _generate_profile(snapshot: dict[str, Any], allowed_refs: list[str]) -> tupl
         "model": provider.model,
         "base_host": urlparse(provider.base_url or "").hostname,
         "timeout_seconds": provider.settings["timeout"],
-        "max_retries": 0,
+        "max_retries": provider.settings["max_retries"],
     }
 
 

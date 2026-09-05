@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getDb } from '../db';
 import { agentBase, agentUrl, probeAgent } from '../harnessClient';
+import { apiSettingsRequired, getLlmApiSettings, hasUsableLlmSettings } from '../services/llmSettings';
 import {
   RESEARCH_ASSISTANT_INSTRUCTIONS,
   explainResearchStreamError,
@@ -168,6 +169,10 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
   const message = String(req.body?.message || '').trim();
   if (!conversation) { res.status(404).json({ message: '会话不存在' }); return; }
   if (!message) { res.status(400).json({ message: '消息不能为空' }); return; }
+  if (!hasUsableLlmSettings(req.userId!)) {
+    res.status(428).json(apiSettingsRequired(conversation.surface === 'research' ? '科研对话' : '智能对话'));
+    return;
+  }
   const db = getDb();
   db.prepare('INSERT INTO conversation_messages (conversation_id, user_id, role, content) VALUES (?, ?, ?, ?)').run(id, req.userId!, 'user', message);
   db.prepare("UPDATE conversations SET updated_at=datetime('now','localtime') WHERE id=? AND user_id=?").run(id, req.userId!);
@@ -190,13 +195,15 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     res.status(503).json({ message: 'PAPERCLAW Agent 未配置' });
     return;
   }
-  if (!await probeAgent(1500)) {
+  // Research needs the chat model, not mentor-readiness. Let the actual
+  // streaming request decide that dependency so research does not spend an
+  // extra probe round-trip before showing the first token.
+  if (conversation.surface !== 'research' && !await probeAgent(1500)) {
     const message = 'PAPERCLAW Agent 当前未就绪（数据库或上游依赖不可用），请稍后重试。';
     persistAssistantMessage(id!, req.userId!, message, { source: 'paperclaw', error: true });
     res.status(503).json({ message });
     return;
   }
-
   const controller = new AbortController();
   const timeoutMs = researchAgentTimeoutMs();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -215,6 +222,10 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
       activeGoal ? `当前会话目标：${String((activeGoal as any).title || '')}${(activeGoal as any).description ? `\n目标说明：${String((activeGoal as any).description)}` : ''}` : '',
       enabledSkills.length ? `用户已启用以下声明式 Skill。仅在当前问题相关且权限允许时参考，不要声称已执行未授权工具：\n${enabledSkills.map((skill) => `- ${skill.name}：${skill.description || '无说明'}\n  指令：${String(skill.prompt_template || '').slice(0, 1800)}`).join('\n')}` : '',
     ].filter(Boolean).join('\n\n').slice(0, 10000);
+    const userLlm = getLlmApiSettings(req.userId!, true);
+    const userModelOverrides = userLlm.enabled && userLlm.baseUrl && userLlm.model && userLlm.apiKey
+      ? { model: userLlm.model, api_key: userLlm.apiKey, base_url: userLlm.baseUrl }
+      : {};
     const upstream = await fetch(agentUrl('/api/agent/messages/stream'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -223,6 +234,7 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
         message,
         active_paper_id: req.body?.active_paper_id || undefined,
         ...researchAgentOverrides(conversation.surface),
+        ...userModelOverrides,
         metadata: {
           surface: conversation.surface,
           owner_id: String(req.userId!),
@@ -236,7 +248,10 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     });
     if (!upstream.ok || !upstream.body) {
       const detail = (await upstream.text().catch(() => '')).slice(0, 500);
-      const failure = detail || 'PAPERCLAW Agent 调用失败';
+      const rawFailure = detail || 'PAPERCLAW Agent 调用失败';
+      const failure = conversation.surface === 'research'
+        ? explainResearchStreamError(new Error(rawFailure), timeoutMs).message
+        : rawFailure;
       persistAssistantMessage(id!, req.userId!, `这次处理没有完成：${failure}`, { source: 'paperclaw', error: true });
       res.status(upstream.status || 502).json({ message: failure });
       return;
@@ -253,6 +268,7 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     let terminalError = '';
     const consume = (line: string) => {
       if (!line.trim()) return;
+      let outputLine = line;
       try {
         const event = JSON.parse(line) as { type?: string; thread_id?: number; message?: string; error?: string };
         if (event.thread_id && !conversation.agent_thread_id) {
@@ -267,9 +283,14 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
         if (event.type === 'run_failed' || event.type === 'run_cancelled' || event.type === 'run_waiting_for_user') {
           terminalType = event.type;
           terminalError = String(event.error || event.message || '');
+          if (event.type === 'run_failed' && conversation.surface === 'research') {
+            terminalError = explainResearchStreamError(new Error(terminalError || 'PAPERCLAW Agent 调用失败'), timeoutMs).message;
+            event.error = terminalError;
+            outputLine = JSON.stringify(event);
+          }
         }
       } catch { /* 保持原始事件透传 */ }
-      res.write(`${line}\n`);
+      res.write(`${outputLine}\n`);
       flushStream(res);
     };
     while (true) {
@@ -284,7 +305,12 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     if (buffer.trim()) consume(buffer);
     const fallback = '科研助手没有返回文字内容。请再试一次，或改用右侧「论文检索」。';
     let saved = assistantText.trim();
-    if (!saved && terminalType === 'run_failed') saved = `这次处理没有完成：${terminalError || 'PAPERCLAW Agent 调用失败'}`;
+    if (!saved && terminalType === 'run_failed') {
+      const failure = conversation.surface === 'research'
+        ? explainResearchStreamError(new Error(terminalError || 'PAPERCLAW Agent 调用失败'), timeoutMs).message
+        : (terminalError || 'PAPERCLAW Agent 调用失败');
+      saved = `这次处理没有完成：${failure}`;
+    }
     if (!saved && terminalType === 'run_cancelled') saved = '这次科研对话已被取消。';
     if (!saved && terminalType === 'run_waiting_for_user') saved = '需要你确认后才能继续。请在对话里明确选择论文，或使用右侧论文检索。';
     if (!saved) saved = fallback;

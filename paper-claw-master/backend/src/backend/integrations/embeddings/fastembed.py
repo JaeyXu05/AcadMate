@@ -12,6 +12,9 @@ from functools import lru_cache
 
 from backend.schemas import ResolvedProviderConfig
 
+_HF_MIRROR = "https://hf-mirror.com"
+_HF_OFFICIAL = "https://huggingface.co"
+
 
 def _apply_hf_env(provider: ResolvedProviderConfig) -> None:
     """把镜像/离线开关写入进程环境，并强制 huggingface_hub 重读。
@@ -19,28 +22,32 @@ def _apply_hf_env(provider: ResolvedProviderConfig) -> None:
     huggingface_hub 在 import 时就把 ``constants.ENDPOINT`` 固化了，所以这里
     既写 ``os.environ`` 也直接改写 ``constants``，两种路径都生效。
     """
-    hf_endpoint = str(provider.settings.get("hf_endpoint") or "").strip()
-    if hf_endpoint:
-        os.environ.setdefault("HF_ENDPOINT", hf_endpoint)
-    if str(provider.settings.get("hf_disable_xet", "")).strip().casefold() in {
-        "1",
-        "true",
-        "yes",
-    }:
-        os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+    hf_endpoint = str(provider.settings.get("hf_endpoint") or "").strip() or _HF_OFFICIAL
+    _set_hf_endpoint(hf_endpoint)
+    # FastEmbed's Xet transport is fragile behind mirrors/proxies.  Downloads
+    # still work with Xet disabled and it avoids hard-to-debug first-run
+    # timeouts, so keep Xet off for every endpoint.
+    _set_hf_disable_xet()
 
-    # Reflect into huggingface_hub.constants (already imported by fastembed),
-    # otherwise the global ENDPOINT stays frozen at the compiled-in default.
+
+def _set_hf_endpoint(hf_endpoint: str) -> None:
+    os.environ["HF_ENDPOINT"] = hf_endpoint
     try:
         import huggingface_hub.constants as _constants
 
-        if hf_endpoint:
-            _constants.ENDPOINT = hf_endpoint
-        if _constants is not None and os.environ.get("HF_HUB_DISABLE_XET"):
-            # Xet 开关常量在 huggingface_hub.utils / file_download 中读取；
-            # 环境变量已设置即可，这里保证后续 imported 进程一致。
-            pass
+        _constants.ENDPOINT = hf_endpoint
     except Exception:  # noqa: BLE001 - hugginface_hub optional
+        pass
+    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
+
+def _set_hf_disable_xet() -> None:
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    try:
+        import huggingface_hub.constants as _constants
+
+        _constants.HF_HUB_DISABLE_XET = "1"  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - huggingface_hub optional
         pass
 
 
@@ -62,5 +69,21 @@ class FastEmbedEmbeddingAdapter:
             raise ValueError("A local embedding model name is required.")
         _apply_hf_env(provider)
         cache_dir = str(provider.settings.get("cache_dir") or "") or None
-        model = _model(provider.model, cache_dir)
-        return [vector.astype(float).tolist() for vector in model.embed(texts)]
+        configured_endpoint = (
+            str(provider.settings.get("hf_endpoint") or "").strip() or _HF_OFFICIAL
+        )
+        candidates = [configured_endpoint]
+        for candidate in (_HF_MIRROR, _HF_OFFICIAL):
+            if candidate not in candidates:
+                candidates.append(candidate)
+        last_error: Exception | None = None
+        for endpoint in candidates:
+            _set_hf_endpoint(endpoint)
+            _set_hf_disable_xet()
+            try:
+                model = _model(provider.model, cache_dir)
+                return [vector.astype(float).tolist() for vector in model.embed(texts)]
+            except Exception as exc:  # noqa: BLE001 - retry with the next endpoint
+                last_error = exc
+        assert last_error is not None
+        raise last_error

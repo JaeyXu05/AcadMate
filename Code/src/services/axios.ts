@@ -28,9 +28,14 @@ export function clearToken(): void {
  * 顶层 App（main.tsx / App.tsx）监听它做"应用内跳转欢迎页 + 提示"，避免整页刷新丢失 SPA 状态。
  */
 export const SESSION_EXPIRED_EVENT = 'auth:session-expired';
+export const API_SETTINGS_REQUIRED_EVENT = 'api:settings-required';
 
 export function emitSessionExpired(): void {
   window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+}
+
+export function emitApiSettingsRequired(detail?: { message?: string; path?: string }): void {
+  window.dispatchEvent(new CustomEvent(API_SETTINGS_REQUIRED_EVENT, { detail }));
 }
 
 // 请求拦截器：自动注入 token
@@ -49,6 +54,14 @@ api.interceptors.response.use(
     if (error.response?.status === 401) {
       clearToken();
       emitSessionExpired();
+    } else if (
+      error.response?.status === 428
+      && error.response?.data?.code === 'API_SETTINGS_REQUIRED'
+    ) {
+      emitApiSettingsRequired({
+        message: error.response.data.message,
+        path: error.response.data.action?.path,
+      });
     } else if (!error.response) {
       // 显式加了长超时的请求（PDF 分析 / 论文阅读）由页面自己解释超时，
       // 不要再弹出「网络连接异常」。

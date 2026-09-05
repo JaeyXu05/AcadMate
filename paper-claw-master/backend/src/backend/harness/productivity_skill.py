@@ -19,8 +19,8 @@ from sqlalchemy.orm import Session
 from backend.db.repositories import AgentRunRepository
 from backend.db.types import RunStatus, WorkflowName
 from backend.harness.contracts import RunCreate, RunCreated
+from backend.harness.provider_overrides import provider_for_run
 from backend.integrations.llm.openai_compatible import OpenAICompatibleChatModelAdapter
-from backend.services.providers import chat_provider_from_settings
 from backend.settings import get_settings
 from backend.tools.context import tool_session
 
@@ -253,6 +253,7 @@ def start_progress_report(
             period_end=context.period_end or "",
             current_time=context.current_time or "",
             timezone=context.timezone or "Asia/Shanghai",
+            request=request,
         )
         draft = _restrict_evidence_refs(draft, set(evidence_refs))
         draft = _humanize_report_draft(draft)
@@ -342,6 +343,7 @@ def start_plan_coach(request: RunCreate, session: Session, *, run_id: int | None
             allowed_evidence_refs=evidence_refs,
             current_time=current_time,
             timezone=timezone,
+            request=request,
         )
         draft = _restrict_plan_evidence_refs(draft, set(evidence_refs))
         draft = _humanize_plan_draft(draft)
@@ -435,9 +437,10 @@ def _generate_plan_draft(
     allowed_evidence_refs: list[str],
     current_time: str,
     timezone: str,
+    request: RunCreate,
 ) -> tuple[PlanCoachDraft, dict[str, Any]]:
     settings = get_settings()
-    provider = chat_provider_from_settings(settings).model_copy(deep=True)
+    provider = provider_for_run(request).model_copy(deep=True)
     provider.settings = {
         **provider.settings,
         "max_tokens": min(settings.chat_max_tokens, settings.plan_chat_max_tokens),
@@ -910,9 +913,10 @@ def _generate_report_draft(
     period_end: str,
     current_time: str,
     timezone: str,
+    request: RunCreate,
 ) -> tuple[ProgressReportDraft, dict[str, Any]]:
     settings = get_settings()
-    provider = chat_provider_from_settings(settings).model_copy(deep=True)
+    provider = provider_for_run(request).model_copy(deep=True)
     provider.settings = {
         **provider.settings,
         "max_tokens": min(settings.chat_max_tokens, settings.report_chat_max_tokens),

@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 import httpx
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from backend.api.errors import register_error_handlers
@@ -18,6 +19,12 @@ from backend.services.arxiv_task_scheduler import start_arxiv_task_scheduler, st
 
 logger = logging.getLogger(__name__)
 _chat_probe_cache: tuple[float, bool, str | None] = (0.0, False, "not_checked")
+
+
+class ChatReadinessRequest(BaseModel):
+    api_key: str | None = None
+    base_url: str | None = None
+    model: str | None = None
 
 
 def _chat_probe_client(base_url: str) -> httpx.Client:
@@ -31,22 +38,30 @@ def _chat_probe_client(base_url: str) -> httpx.Client:
     return httpx.Client(trust_env=False, timeout=8.0)
 
 
-def _chat_readiness() -> tuple[bool, str | None]:
+def _chat_readiness(
+    api_key: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> tuple[bool, str | None]:
     """Probe the configured CHATAGENT gateway, not merely env presence."""
     global _chat_probe_cache
-    checked_at, cached_ok, cached_error = _chat_probe_cache
-    now = time.monotonic()
-    if now - checked_at < 20:
-        return cached_ok, cached_error
     settings = get_settings()
-    if not (settings.chat_api_key and settings.chat_base_url and settings.chat_model):
-        _chat_probe_cache = (now, False, "not_configured")
+    has_override = any(value is not None for value in (api_key, base_url, model))
+    effective_api_key = (api_key if has_override else settings.chat_api_key) or ""
+    effective_base_url = (base_url if has_override else settings.chat_base_url) or ""
+    effective_model = (model if has_override else settings.chat_model) or ""
+    if not all(value.strip() for value in (effective_api_key, effective_base_url, effective_model)):
         return False, "not_configured"
+    now = time.monotonic()
+    if not has_override:
+        checked_at, cached_ok, cached_error = _chat_probe_cache
+        if now - checked_at < 20:
+            return cached_ok, cached_error
     try:
-        with _chat_probe_client(settings.chat_base_url) as client:
+        with _chat_probe_client(effective_base_url) as client:
             response = client.get(
-                f"{settings.chat_base_url.rstrip('/')}/models",
-                headers={"Authorization": f"Bearer {settings.chat_api_key}"},
+                f"{effective_base_url.rstrip('/')}/models",
+                headers={"Authorization": f"Bearer {effective_api_key}"},
             )
             response.raise_for_status()
             model_ids = {
@@ -54,13 +69,12 @@ def _chat_readiness() -> tuple[bool, str | None]:
                 for item in response.json().get("data", [])
                 if isinstance(item, dict)
             }
-        if settings.chat_model not in model_ids:
-            _chat_probe_cache = (now, False, "configured_model_unavailable")
-        else:
-            _chat_probe_cache = (now, True, None)
+        result = (True, None) if effective_model in model_ids else (False, "configured_model_unavailable")
     except Exception as exc:  # readiness returns a compact dependency error
-        _chat_probe_cache = (now, False, type(exc).__name__)
-    return _chat_probe_cache[1], _chat_probe_cache[2]
+        result = (False, type(exc).__name__)
+    if not has_override:
+        _chat_probe_cache = (now, result[0], result[1])
+    return result
 
 
 def _readiness_payload() -> dict[str, object]:
@@ -155,6 +169,17 @@ def create_app() -> FastAPI:
             status_code=200 if payload["ready"] else 503,
             content=payload,
         )
+
+    @app.post("/api/chat-ready")
+    def chat_ready(request: ChatReadinessRequest) -> JSONResponse:
+        """Check the actual model gateway, including a D-side user override."""
+        ready, error = _chat_readiness(request.api_key, request.base_url, request.model)
+        payload = {
+            "status": "ready" if ready else "not_ready",
+            "ready": ready,
+            "error": error,
+        }
+        return JSONResponse(status_code=200 if ready else 503, content=payload)
 
     @app.on_event("startup")
     def start_background_services() -> None:

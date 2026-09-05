@@ -27,7 +27,7 @@ function sortAdvisors(list: Advisor[], by: SortBy): Advisor[] {
       sorted.sort((a, b) => a.id.localeCompare(b.id));
       break;
     case 'papers':
-      sorted.sort((a, b) => b.papers - a.papers);
+      sorted.sort((a, b) => (b.papers ?? 0) - (a.papers ?? 0));
       break;
     case 'department':
       sorted.sort((a, b) => a.department.localeCompare(b.department, 'zh'));

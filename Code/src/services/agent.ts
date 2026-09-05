@@ -1,5 +1,5 @@
 import type { SseEvent } from '../types/search';
-import api from './axios';
+import api, { emitApiSettingsRequired } from './axios';
 
 export interface ChatWithAgentOptions {
   signal?: AbortSignal;
@@ -116,6 +116,9 @@ export async function chatWithAgent(
           try {
             const parsed = JSON.parse(data) as SseEvent;
             if (eventType) parsed.type = eventType as SseEvent['type'];
+            if (parsed.type === 'error' && parsed.code === 'API_SETTINGS_REQUIRED') {
+              emitApiSettingsRequired({ message: parsed.message, path: '/api-settings' });
+            }
             onEvent(parsed);
             if (parsed.type === 'event' || parsed.type === 'stage') {
               await new Promise((r) => setTimeout(r, 40));

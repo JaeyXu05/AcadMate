@@ -3,11 +3,17 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
+from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 from backend.db.engine import get_database_url
 from backend.db.base import Base
 from backend.db.models import *  # noqa: F403
+from backend.settings import REPO_ROOT
+
+# Keep direct `alembic ...` invocations consistent with the portable launcher
+# and the A service. Process environment variables still take precedence.
+load_dotenv(REPO_ROOT / ".env", override=False)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_database_url())

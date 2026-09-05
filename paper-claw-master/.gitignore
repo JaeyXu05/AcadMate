@@ -33,5 +33,8 @@ data/*
 !data/manual_overrides.json
 !data/mentor_role_overrides.json
 
+# Backend-launch fallback data (settings now resolve ./data to the repo root)
+backend/data/
+
 # Notebook
 notebooks/

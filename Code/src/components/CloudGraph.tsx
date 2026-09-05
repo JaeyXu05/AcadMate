@@ -275,6 +275,11 @@ export default function CloudGraph({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 0.92;
     renderer.domElement.setAttribute('aria-hidden', 'true');
+    renderer.domElement.style.touchAction = 'none';
+    renderer.domElement.style.userSelect = 'none';
+    renderer.domElement.style.webkitUserSelect = 'none';
+    renderer.domElement.style.setProperty('-webkit-tap-highlight-color', 'transparent');
+    renderer.domElement.draggable = false;
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -285,9 +290,41 @@ export default function CloudGraph({
     controls.autoRotateSpeed = 0.28;
     controls.minDistance = 110;
     controls.maxDistance = 4200;
-    controls.enablePan = true;
-    controls.listenToKeyEvents(mount);
+    // Use OrbitControls' built-in pan so its distance/FOV-aware movement stays
+    // smooth. The target is synchronized back to the black-hole center when
+    // the next normal left-button rotation begins.
+    controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+    controls.mouseButtons.MIDDLE = THREE.MOUSE.DOLLY;
+    controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+    controls.touches.ONE = THREE.TOUCH.ROTATE;
+    controls.touches.TWO = THREE.TOUCH.DOLLY_PAN;
+    // Mouse/touch gestures are handled below so the orbit target can remain
+    // the black-hole center even after the user pans the view.
+    controls.screenSpacePanning = true;
+    controls.enablePan = false;
     controls.saveState();
+    let panPointerId: number | null = null;
+    let activeGesture: 'rotate' | 'pan' | null = null;
+    let lastPointerPosition = { x: 0, y: 0 };
+    const panOffset = new THREE.Vector3();
+
+    const updateControlsPreservingPan = (deltaSeconds = 0) => {
+      if (panOffset.lengthSq() <= 0.0001) {
+        controls.update(deltaSeconds);
+        return;
+      }
+
+      // OrbitControls must calculate its orbit from the fixed black-hole
+      // center. Rotate the visual pan translation by the same camera delta so
+      // the physical black hole remains pinned to its post-pan screen point.
+      const previousCameraQuaternion = camera.quaternion.clone();
+      camera.position.sub(panOffset);
+      controls.update(deltaSeconds);
+      const cameraRotationDelta = camera.quaternion.clone().multiply(previousCameraQuaternion.invert());
+      panOffset.applyQuaternion(cameraRotationDelta);
+      camera.position.add(panOffset);
+      camera.updateMatrixWorld();
+    };
 
     const disposableTextures = new Set<THREE.Texture>();
 
@@ -785,7 +822,7 @@ export default function CloudGraph({
         armMist.rotation.x = pointerNdcCurrent.y * 0.004;
         if (cursorGlowActive) cursorGlow.position.lerp(cursorGlowTarget, 0.14);
       }
-      controls.update(deltaSeconds);
+      updateControlsPreservingPan(deltaSeconds);
       armDust.rotation.y = time * 0.0000025;
       armMist.rotation.y = -time * 0.0000015;
       renderOnce(time);
@@ -867,6 +904,7 @@ export default function CloudGraph({
     focusNodeRef.current = (id: string) => {
       const node = nodeById.get(id);
       if (!node) return;
+      panOffset.set(0, 0, 0);
       const target = new THREE.Vector3(node.x ?? 0, node.y ?? 0, node.z ?? 0);
       const direction = camera.position.clone().sub(controls.target);
       if (direction.lengthSq() < 0.001) direction.set(0, 0.5, 1);
@@ -902,6 +940,7 @@ export default function CloudGraph({
 
     resetViewRef.current = () => {
       cameraTween = null;
+      panOffset.set(0, 0, 0);
       camera.position.copy(defaultCameraPosition);
       controls.target.copy(sceneTarget);
       camera.fov = 48;
@@ -1004,8 +1043,48 @@ export default function CloudGraph({
       if (shouldReduceMotion) renderOnce();
     };
 
+    let spacePressed = false;
     const onPointerMove = (event: PointerEvent) => {
       pointerPosition = { x: event.clientX, y: event.clientY };
+      if (panPointerId === event.pointerId && activeGesture) {
+        const deltaX = event.clientX - lastPointerPosition.x;
+        const deltaY = event.clientY - lastPointerPosition.y;
+        lastPointerPosition = { x: event.clientX, y: event.clientY };
+        if (activeGesture === 'pan') {
+          const bounds = renderer.domElement.getBoundingClientRect();
+          const baseCameraPosition = camera.position.clone().sub(panOffset);
+          const targetDistance = baseCameraPosition.distanceTo(sceneTarget);
+          const worldUnitsPerPixel = (2 * targetDistance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)))
+            / Math.max(1, bounds.height);
+          camera.updateMatrixWorld();
+          const cameraRight = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+          const cameraUp = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
+          const panDelta = cameraRight.multiplyScalar(-deltaX * worldUnitsPerPixel)
+            .add(cameraUp.multiplyScalar(deltaY * worldUnitsPerPixel));
+          camera.position.add(panDelta);
+          panOffset.add(panDelta);
+          camera.updateMatrixWorld();
+        } else {
+          const angleScale = (Math.PI * 2 * controls.rotateSpeed) / Math.max(1, renderer.domElement.clientHeight);
+          const rotateWithFixedPivot = () => {
+            if (deltaX !== 0) controls.rotateLeft(deltaX * angleScale);
+            if (deltaY !== 0) controls.rotateUp(deltaY * angleScale);
+          };
+          const hasPanOffset = panOffset.lengthSq() > 0.0001;
+          const previousCameraQuaternion = camera.quaternion.clone();
+          if (hasPanOffset) camera.position.sub(panOffset);
+          rotateWithFixedPivot();
+          if (hasPanOffset) {
+            const cameraRotationDelta = camera.quaternion.clone().multiply(previousCameraQuaternion.invert());
+            panOffset.applyQuaternion(cameraRotationDelta);
+            camera.position.add(panOffset);
+          }
+          camera.updateMatrixWorld();
+        }
+        hideHover();
+        renderOnce();
+        return;
+      }
       const bounds = renderer.domElement.getBoundingClientRect();
       const normalizedX = (event.clientX - bounds.left) / Math.max(1, bounds.width);
       const normalizedY = (event.clientY - bounds.top) / Math.max(1, bounds.height);
@@ -1014,8 +1093,64 @@ export default function CloudGraph({
       if (!pointerFrame) pointerFrame = requestAnimationFrame(updateHover);
     };
     let pointerDown = { x: 0, y: 0 };
+    const finishGesture = () => {
+      if (panPointerId === null) return;
+      if (renderer.domElement.hasPointerCapture?.(panPointerId)) {
+        renderer.domElement.releasePointerCapture(panPointerId);
+      }
+      panPointerId = null;
+      activeGesture = null;
+      controls.autoRotate = !shouldReduceMotion;
+      renderer.domElement.style.cursor = 'grab';
+      renderOnce();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      spacePressed = true;
+      event.preventDefault();
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code !== 'Space') return;
+      spacePressed = false;
+      event.preventDefault();
+    };
+    const onWindowBlur = () => {
+      spacePressed = false;
+      finishGesture();
+    };
     const onPointerDown = (event: PointerEvent) => {
       pointerDown = { x: event.clientX, y: event.clientY };
+      const panRequested = event.button === 2 || (event.button === 0 && (event.shiftKey || spacePressed));
+      const rotateRequested = event.button === 0 && !panRequested;
+      if (!panRequested && !rotateRequested) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      panPointerId = event.pointerId;
+      activeGesture = panRequested ? 'pan' : 'rotate';
+      lastPointerPosition = { x: event.clientX, y: event.clientY };
+      controls.autoRotate = false;
+      renderer.domElement.setPointerCapture?.(event.pointerId);
+      renderer.domElement.style.cursor = 'grabbing';
+      hideHover();
+    };
+    const onPointerEnd = (event: PointerEvent) => {
+      if (panPointerId !== event.pointerId) return;
+      finishGesture();
+    };
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.deltaY === 0) return;
+      const zoomScale = Math.pow(0.95, controls.zoomSpeed * Math.abs(event.deltaY * 0.01));
+      if (panOffset.lengthSq() > 0.0001) camera.position.sub(panOffset);
+      if (event.deltaY < 0) controls.dollyIn(zoomScale);
+      else controls.dollyOut(zoomScale);
+      if (panOffset.lengthSq() > 0.0001) camera.position.add(panOffset);
+      camera.updateMatrixWorld();
+      renderOnce();
+    };
+    const onContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
     };
     const onClick = (event: MouseEvent) => {
       if (Math.hypot(event.clientX - pointerDown.x, event.clientY - pointerDown.y) > 5) return;
@@ -1023,8 +1158,15 @@ export default function CloudGraph({
       hideHover();
       onSelectRef.current?.(index === null ? null : nodes[index].id);
     };
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('keyup', onKeyUp, true);
+    window.addEventListener('blur', onWindowBlur);
     renderer.domElement.addEventListener('pointermove', onPointerMove);
-    renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerdown', onPointerDown, true);
+    renderer.domElement.addEventListener('pointerup', onPointerEnd);
+    renderer.domElement.addEventListener('pointercancel', onPointerEnd);
+    renderer.domElement.addEventListener('wheel', onWheel, true);
+    renderer.domElement.addEventListener('contextmenu', onContextMenu);
     renderer.domElement.addEventListener('pointerleave', hideHover);
     renderer.domElement.addEventListener('click', onClick);
 
@@ -1036,9 +1178,12 @@ export default function CloudGraph({
       camera.updateProjectionMatrix();
       defaultCameraPosition = makeDefaultCameraPosition(camera.aspect);
       if (!selectedRef.current) {
+        panOffset.set(0, 0, 0);
         camera.position.copy(defaultCameraPosition);
         controls.target.copy(sceneTarget);
         controls.update();
+      } else {
+        updateControlsPreservingPan();
       }
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setSize(width, height, false);
@@ -1069,8 +1214,15 @@ export default function CloudGraph({
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('keyup', onKeyUp, true);
+      window.removeEventListener('blur', onWindowBlur);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
-      renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerdown', onPointerDown, true);
+      renderer.domElement.removeEventListener('pointerup', onPointerEnd);
+      renderer.domElement.removeEventListener('pointercancel', onPointerEnd);
+      renderer.domElement.removeEventListener('wheel', onWheel, true);
+      renderer.domElement.removeEventListener('contextmenu', onContextMenu);
       renderer.domElement.removeEventListener('pointerleave', hideHover);
       renderer.domElement.removeEventListener('click', onClick);
       controls.removeEventListener('change', onControlsChange);

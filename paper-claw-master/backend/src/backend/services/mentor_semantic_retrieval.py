@@ -19,6 +19,8 @@ import numpy as np
 
 from backend.integrations.embeddings import FastEmbedEmbeddingAdapter
 from backend.mentor_workflow.schemas import CandidateMentor, EvidenceRecord
+from backend.mentor_workflow.text_matching import contains as _contains
+from backend.mentor_workflow.text_matching import normalize as _normalize
 from backend.mentor_workflow.topic_cleaning import clean_topics
 from backend.schemas import ResolvedProviderConfig
 from backend.services.providers import embedding_provider_from_settings
@@ -29,6 +31,7 @@ class SemanticMentorHit:
     candidate: CandidateMentor
     score: float
     segment_indexes: list[int]
+    mode: str = "dense"
 
 
 class MentorSemanticIndex:
@@ -51,6 +54,7 @@ class MentorSemanticIndex:
         self._evidence: list[EvidenceRecord] = []
         self._candidate_matrix: np.ndarray | None = None
         self._topic_matrix: np.ndarray | None = None
+        self._embedding_error: str | None = None
 
     @property
     def candidates(self) -> list[CandidateMentor]:
@@ -66,12 +70,16 @@ class MentorSemanticIndex:
         cleaned = [" ".join(text.split()) for text in segments if text and text.strip()]
         if not cleaned or not self._candidates:
             return []
+        candidate_matrix = self._candidate_matrix
+        if candidate_matrix is None or not len(candidate_matrix):
+            # Dense embeddings are not available (model download failed or the
+            # index was built without them).  Fall back to conservative exact
+            # phrase matching over curated research topics/methods so PDF
+            # analysis degrades gracefully instead of surfacing a network error.
+            return self._lexical_search(cleaned, top_k=top_k)
         query_matrix = _normalized_matrix(
             self.adapter.embed_texts(self.provider, cleaned)
         )
-        candidate_matrix = self._candidate_matrix
-        if candidate_matrix is None or not len(candidate_matrix):
-            return []
         topic_matrix = self._topic_matrix
         similarities = query_matrix @ candidate_matrix.T
         # 方向维度加权：见 _ensure_loaded 注释——整体多段文档混入院系/论文/方法
@@ -107,6 +115,51 @@ class MentorSemanticIndex:
         ranked.sort(key=lambda item: (-item.score, item.candidate.candidate_id))
         return ranked[: max(1, top_k)]
 
+    def _lexical_search(
+        self, segments: list[str], *, top_k: int
+    ) -> list[SemanticMentorHit]:
+        """Deterministic phrase fallback used when local embeddings are missing.
+
+        It only matches the curated ``research_topics``/``methods`` strings,
+        never raw faculty pages or publications, so a degraded hit still points
+        at a verified research direction instead of a generic profile term.
+        """
+        ranked: list[SemanticMentorHit] = []
+        normalized_segments = [_normalize(segment) for segment in segments]
+        for candidate in self._candidates:
+            targets = [
+                _normalize(value)
+                for value in [*candidate.research_topics, *candidate.methods]
+                if value and len(_normalize(value)) >= 2
+            ]
+            if not targets:
+                continue
+            matched_indexes: list[int] = []
+            matched_targets: set[str] = set()
+            for index, segment in enumerate(normalized_segments):
+                segment_hits = {
+                    target for target in targets if target and _contains(segment, target)
+                }
+                if segment_hits:
+                    matched_indexes.append(index)
+                    matched_targets.update(segment_hits)
+            if not matched_indexes:
+                continue
+            # One exact curated-phrase hit is a strong signal (0.63 maps to a
+            # conservative 81 fit score under the no-LLM reranker); repeated
+            # support across segments adds only a small bonus.
+            score = min(1.0, 0.63 + 0.05 * len(matched_targets) + 0.02 * len(matched_indexes))
+            ranked.append(
+                SemanticMentorHit(
+                    candidate=candidate,
+                    score=round(score, 4),
+                    segment_indexes=matched_indexes,
+                    mode="lexical_fallback",
+                )
+            )
+        ranked.sort(key=lambda item: (-item.score, item.candidate.candidate_id))
+        return ranked[: max(1, top_k)]
+
     def warm(self) -> None:
         """Materialize and cache both candidate and topic matrices."""
         self._ensure_loaded()
@@ -127,29 +180,34 @@ class MentorSemanticIndex:
             for item in payload.get("evidence", [])
             if isinstance(item, dict)
         ]
-        fingerprint = self._fingerprint()
-        self._candidate_matrix = self._load_cached_matrix(fingerprint, "candidate")
-        if self._candidate_matrix is None:
-            documents = [_candidate_document(candidate) for candidate in self._candidates]
-            self._candidate_matrix = _normalized_matrix(
-                self.adapter.embed_texts(self.provider, documents)
-            )
-            self._save_cached_matrix(fingerprint, self._candidate_matrix, "candidate")
-        # 额外构建「纯研究方向」候选矩阵：研究方向字段单独 embed（不含院系/论文/
-        # 方法等泛词），供 search 里对方向维度单算相似度、主导排序。这样既能保留
-        # 整体文档的召回覆盖，又能让"研究方向精确命中"压过"论文里偶然出现的同义词"。
-        # 方向文档极短、单次进程只构建一次，故不落盘缓存（整体矩阵已缓存，主体开销不重复）。
-        topic_documents = [
-            _candidate_topic_document(candidate) for candidate in self._candidates
-        ]
-        if any(topic_documents):
-            self._topic_matrix = self._load_cached_matrix(fingerprint, "topic")
-            if self._topic_matrix is None:
-                self._topic_matrix = _normalized_matrix(
-                    self.adapter.embed_texts(self.provider, topic_documents)
+        try:
+            fingerprint = self._fingerprint()
+            self._candidate_matrix = self._load_cached_matrix(fingerprint, "candidate")
+            if self._candidate_matrix is None:
+                documents = [_candidate_document(candidate) for candidate in self._candidates]
+                self._candidate_matrix = _normalized_matrix(
+                    self.adapter.embed_texts(self.provider, documents)
                 )
-                self._save_cached_matrix(fingerprint, self._topic_matrix, "topic")
-        else:
+                self._save_cached_matrix(fingerprint, self._candidate_matrix, "candidate")
+            # 额外构建「纯研究方向」候选矩阵：研究方向字段单独 embed（不含院系/论文/
+            # 方法等泛词），供 search 里对方向维度单算相似度、主导排序。这样既能保留
+            # 整体文档的召回覆盖，又能让"研究方向精确命中"压过"论文里偶然出现的同义词"。
+            # 方向文档极短、单次进程只构建一次，故不落盘缓存（整体矩阵已缓存，主体开销不重复）。
+            topic_documents = [
+                _candidate_topic_document(candidate) for candidate in self._candidates
+            ]
+            if any(topic_documents):
+                self._topic_matrix = self._load_cached_matrix(fingerprint, "topic")
+                if self._topic_matrix is None:
+                    self._topic_matrix = _normalized_matrix(
+                        self.adapter.embed_texts(self.provider, topic_documents)
+                    )
+                    self._save_cached_matrix(fingerprint, self._topic_matrix, "topic")
+            else:
+                self._topic_matrix = None
+        except Exception as exc:  # noqa: BLE001 - degrade to lexical recall
+            self._embedding_error = f"{type(exc).__name__}: {exc}"
+            self._candidate_matrix = None
             self._topic_matrix = None
         self._loaded = True
 
