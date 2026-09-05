@@ -7,7 +7,7 @@ export const feedbackRouter = Router();
 feedbackRouter.use(authMiddleware);
 
 // ---- 导师负反馈（猜你喜欢「不感兴趣」）----
-// dislike = 过滤排除该导师，不改变 topicOverlap 打分，也不做研究方向降权。
+// dislike = 过滤排除该导师，不改写共享检索分数，也不做研究方向降权。
 // like 预留（收藏 favorites 仍独立承载"进收藏夹"语义，这里仅存显式偏好信号）。
 // 幂等：重复 dislike/like 不报错，直接覆盖为最新 feedback。
 

@@ -138,6 +138,27 @@ def test_intake_recognizes_explicit_mentor_name_without_treating_it_as_topic():
     assert "邮政编码：230026" not in intent.research_topics
 
 
+def test_intake_recognizes_mentor_name_with_role_suffix():
+    for message in ("找张凯导师", "介绍王小明博导"):
+        intent, clarification = InputUnderstandingAgent().run(
+            MentorWorkflowRequest(message=message),
+            new_workflow_state(MentorWorkflowRequest(message=message), trace_id="trace-role-name"),
+        )
+        assert intent.constraints.mentor_names
+        assert intent.research_topics == []
+        assert clarification is None
+
+
+def test_intake_does_not_treat_short_research_topic_as_mentor_name():
+    request = MentorWorkflowRequest(message="帮我找图学习导师")
+    intent, clarification = InputUnderstandingAgent().run(
+        request, new_workflow_state(request, trace_id="trace-short-topic")
+    )
+    assert intent.constraints.mentor_names == []
+    assert intent.query_contract.canonical_query == "graph learning"
+    assert clarification is None
+
+
 def test_query_contract_keeps_preferences_out_of_required_topics():
     request = MentorWorkflowRequest(
         message="我想找做多智能体强化学习、图神经网络，偏理论且正在招生的导师"

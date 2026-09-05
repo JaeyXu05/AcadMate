@@ -41,7 +41,6 @@ function analysisJobTime(job: PdfAnalysisJob): string {
 function PdfPage() {
   const { message } = App.useApp();
   const [stage, setStage] = useState<Stage>('upload');
-  const [uploadId, setUploadId] = useState<string | null>(null);
   const [filename, setFilename] = useState<string>('');
   const [result, setResult] = useState<PdfAnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +66,6 @@ function PdfPage() {
 
   const applyAnalysisJob = (job: PdfAnalysisJob) => {
     setJobId(job.jobId);
-    setUploadId(job.documentId);
     setFilename(typeof job.result?.batchLabel === 'string' && job.result.batchLabel ? job.result.batchLabel : job.filename);
     setSelectedDocumentIds([job.documentId]);
     if (job.status === 'succeeded' && job.result) {
@@ -145,7 +143,6 @@ function PdfPage() {
   }, [activeJobIds, jobId, stage]);
 
   const handleUploaded = (id: string, name: string) => {
-    setUploadId(id);
     setFilename(name);
     setResult(null);
     setError(null);
@@ -189,7 +186,6 @@ function PdfPage() {
 
   const handleReset = () => {
     setStage('upload');
-    setUploadId(null);
     setFilename('');
     setResult(null);
     setError(null);

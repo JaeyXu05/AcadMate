@@ -73,10 +73,6 @@ function teacher(context: ContactEmailContext): string {
   return `${context.candidate.mentor_name}老师`;
 }
 
-function department(context: ContactEmailContext): string {
-  return String(context.candidate.department ?? '').trim() || '【院系/课题组】';
-}
-
 function school(context: ContactEmailContext): string {
   return valueOr(context, 'school') || '【学校】';
 }
@@ -133,14 +129,6 @@ function experienceLines(): string[] {
 
 function qualityLine(): string {
   return '我曾担任【班级/社团职务】，具备一定的组织与沟通能力；同时我也是一个【自主学习能力较强/有明确目标/执行力强】的人。';
-}
-
-function shortPersonalSummary(context: ContactEmailContext): string {
-  return [
-    ...experienceLines(),
-    qualityLine(),
-    '本科期间的经历让我明确希望沿着【老师研究方向】继续深入，也做好了从基础工作学起的准备。',
-  ].join('');
 }
 
 function render(

@@ -65,8 +65,7 @@ function Get-NodeVersion([string]$Node) {
 }
 
 function Test-SupportedNode([hashtable]$Version) {
-    return ($Version.Major -eq 20 -and $Version.Minor -ge 19) -or
-        ($Version.Major -gt 22) -or
+    return ($Version.Major -gt 22) -or
         ($Version.Major -eq 22 -and $Version.Minor -ge 12)
 }
 
@@ -82,12 +81,12 @@ function Ensure-Node {
     $node = Find-Command 'node.exe'
     $version = if ($node) { Get-NodeVersion $node } else { $null }
     if (-not $version -or -not (Test-SupportedNode $version)) {
-        if ($version) { Write-Warn "Node.js $($version.Raw) is unsupported; Vite requires ^20.19.0 or >=22.12.0." }
+        if ($version) { Write-Warn "Node.js $($version.Raw) is unsupported; this project requires >=22.12.0 for better-sqlite3." }
         Install-WingetPackage 'OpenJS.NodeJS.LTS' 'Node.js LTS'
         $node = Find-Command 'node.exe' @('%ProgramFiles%\nodejs\node.exe')
         $version = if ($node) { Get-NodeVersion $node } else { $null }
     }
-    if (-not $version -or -not (Test-SupportedNode $version)) { Stop-Startup 'A supported Node.js version (^20.19.0 or >=22.12.0) is still unavailable. Restart Windows after installation, then rerun.' }
+    if (-not $version -or -not (Test-SupportedNode $version)) { Stop-Startup 'A supported Node.js version (>=22.12.0) is still unavailable. Restart Windows after installation, then rerun.' }
     if (-not (Test-NodeRuntime $node)) { Stop-Startup 'Node.js is present but cannot execute JavaScript. Repair or reinstall Node.js LTS, then rerun.' }
     $npm = Find-Command 'npm.cmd' @('%ProgramFiles%\nodejs\npm.cmd')
     if (-not $npm) { Stop-Startup 'npm was not found next to Node.js. Reinstall Node.js LTS.' }
@@ -225,7 +224,9 @@ function Ensure-Dependencies([string]$Npm, [string]$Uv) {
             # better-sqlite3 ships the Windows native binary in the package.
             # npm otherwise sees binding.gyp and unnecessarily tries to build
             # it locally, which requires Visual Studio C++ Build Tools.
-            $npmInstallCommand = "`"$Npm`" install --no-audit --no-fund --ignore-scripts"
+            # package-lock.json is the deployment contract. npm ci prevents a
+            # fresh machine from silently resolving a different dependency set.
+            $npmInstallCommand = "`"$Npm`" ci --no-audit --no-fund --ignore-scripts"
             & $env:ComSpec /d /c $npmInstallCommand
             if ($LASTEXITCODE -ne 0) { Stop-Startup 'npm install failed. Check network/proxy settings and available disk space.' }
         }
@@ -233,8 +234,12 @@ function Ensure-Dependencies([string]$Npm, [string]$Uv) {
     } finally { Pop-Location }
 
     Write-Step 'Checking A-side Python 3.12+ environment and dependencies'
-    & $Uv sync --project $BackendRoot --dev
+    & $Uv sync --project $BackendRoot --dev --locked
     if ($LASTEXITCODE -ne 0) { Stop-Startup 'uv sync failed. Check network/proxy settings and available disk space.' }
+    $python = Join-Path $BackendRoot '.venv\Scripts\python.exe'
+    & $python -c "import pptx" *> $null
+    if ($LASTEXITCODE -ne 0) { Stop-Startup 'The managed Python environment is missing python-pptx; report presentation export would fail.' }
+    Write-Ok 'A-side Python dependencies and PPT renderer are complete'
 }
 
 function Ensure-SemanticIndex([string]$Python) {
@@ -276,7 +281,7 @@ function Start-Postgres([string]$Docker) {
 function Apply-Migrations([string]$Docker, [string]$Uv) {
     $migrationLog = Join-Path $LogRoot 'migration.log'
     $alembic = Join-Path $BackendRoot '.venv\Scripts\alembic.exe'
-    if (-not (Test-Path -LiteralPath $alembic)) { Stop-Startup 'A-side Python environment is missing. Run 检查启动环境.bat first.' }
+    if (-not (Test-Path -LiteralPath $alembic)) { Stop-Startup 'A-side Python environment is missing. Run the environment preparation batch file first.' }
     $versionsDir = Join-Path $BackendRoot 'migrations\versions'
     $latestMigration = (Get-ChildItem -LiteralPath $versionsDir -Filter '*.py' -File | Sort-Object Name -Descending | Select-Object -First 1).BaseName
     if (-not $latestMigration) { Stop-Startup 'No Alembic migration revision was found.' }
@@ -302,7 +307,7 @@ function Apply-Migrations([string]$Docker, [string]$Uv) {
     Write-Host "  Detailed output: $migrationLog"
     Push-Location $PaperRoot
     try {
-        # Dependencies are prepared by 检查启动环境.bat.  Do not let a daily
+        # Dependencies are prepared by the environment preparation launcher. Do not let a daily
         # launch silently perform another sync/download before the migration.
         # Alembic writes normal INFO lines to stderr.  Running it through cmd
         # prevents PowerShell's strict native-error handling from mistaking
@@ -369,14 +374,18 @@ function Start-ServiceProcess([string]$Title, [string]$WorkingDirectory, [string
 }
 
 function Assert-PreparedEnvironment {
-    if (-not (Test-Path -LiteralPath (Join-Path $CodeRoot 'node_modules\.bin\tsx.cmd'))) { Stop-Startup 'D-side dependencies are missing. Run 检查启动环境.bat first.' }
-    if (-not (Test-Path -LiteralPath (Join-Path $BackendRoot '.venv\Scripts\python.exe'))) { Stop-Startup 'A-side Python environment is missing. Run 检查启动环境.bat first.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $CodeRoot 'node_modules\.bin\tsx.cmd'))) { Stop-Startup 'D-side dependencies are missing. Run the environment preparation batch file first.' }
+    $python = Join-Path $BackendRoot '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python)) { Stop-Startup 'A-side Python environment is missing. Run the environment preparation batch file first.' }
+    & $python -c "import pptx" *> $null
+    if ($LASTEXITCODE -ne 0) { Stop-Startup 'PPT renderer dependency is missing. Run the environment preparation batch file again.' }
 }
 
 function Start-ApplicationServices([hashtable]$Tools) {
     $aLog = Join-Path $LogRoot 'a-backend.log'; $dLog = Join-Path $LogRoot 'd-backend.log'; $frontLog = Join-Path $LogRoot 'frontend.log'; $pids = @{}
+    $managedPython = Join-Path $BackendRoot '.venv\Scripts\python.exe'
     if (-not (Test-AService)) { if (Test-PortListening $Config.APort) { Stop-Startup "Port $($Config.APort) is occupied by a service that is not this A backend." }; Write-Step 'Starting A-side backend'; $pids.a_backend = Start-ServiceProcess 'Mentor Platform - A Backend' $PaperRoot "`"$($Tools.Uv)`" run --project backend uvicorn backend.api.app:create_app --factory --host 127.0.0.1 --port $($Config.APort)" $aLog }
-    if (-not (Test-DService)) { if (Test-PortListening $Config.DPort) { Stop-Startup "Port $($Config.DPort) is occupied by a service that is not this D backend." }; Write-Step 'Starting D-side backend'; $pids.d_backend = Start-ServiceProcess 'Mentor Platform - D Backend' $CodeRoot "`"$($Tools.Npm)`" run dev:backend" $dLog }
+    if (-not (Test-DService)) { if (Test-PortListening $Config.DPort) { Stop-Startup "Port $($Config.DPort) is occupied by a service that is not this D backend." }; Write-Step 'Starting D-side backend'; $pids.d_backend = Start-ServiceProcess 'Mentor Platform - D Backend' $CodeRoot "set `"PAPER_CLAW_PYTHON=$managedPython`" && `"$($Tools.Npm)`" run dev:backend" $dLog }
     if (-not (Test-Frontend)) { if (Test-PortListening $Config.VitePort) { Stop-Startup "Port $($Config.VitePort) is occupied by a service that is not this frontend." }; Write-Step 'Starting frontend'; $pids.frontend = Start-ServiceProcess 'Mentor Platform - Frontend' $CodeRoot "`"$($Tools.Npm)`" run dev:frontend" $frontLog }
     if ($pids.Count) { $pids | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $LogRoot 'last-launch-pids.json') -Encoding UTF8 }
     Wait-Check 'A-side backend' { Test-AService } 120
@@ -419,10 +428,10 @@ try {
         if (-not $NoBrowser) { Start-Process $Config.FrontendUrl | Out-Null }
     } else {
         Write-Step 'Checking and preparing the complete environment'; $tools = Ensure-Node; Test-RuntimeData $tools.Node; $tools.Uv = Ensure-Uv; $tools.Docker = Ensure-Docker
-        if ($CheckOnly) { Write-Ok 'Basic tool/config/data check completed. Use 检查启动环境.bat for dependency installation and migrations.'; exit 0 }
+        if ($CheckOnly) { Write-Ok 'Basic tool/config/data check completed. Use the environment preparation batch file for dependency installation and migrations.'; exit 0 }
         Ensure-Dependencies $tools.Npm $tools.Uv; Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv
         Ensure-SemanticIndex (Join-Path $BackendRoot '.venv\Scripts\python.exe')
-        Write-Host "`nEnvironment preparation completed. Use 启动项目.bat to start and verify the application." -ForegroundColor Green
+        Write-Host "`nEnvironment preparation completed. Use the project launch batch file to start and verify the application." -ForegroundColor Green
         Write-Host "LLM API is optional. After login, each user can save a private API configuration from the API Settings page." -ForegroundColor Yellow
     }
     exit 0

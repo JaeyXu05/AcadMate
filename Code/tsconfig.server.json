@@ -9,7 +9,9 @@
     "outDir": "dist-server",
     "rootDir": "server",
     "resolveJsonModule": true,
-    "declaration": false
+    "declaration": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   },
   "include": ["server"]
 }

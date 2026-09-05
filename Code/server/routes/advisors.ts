@@ -39,7 +39,7 @@ advisorsRouter.get('/:id', (req: AuthRequest, res: Response) => {
     };
     if (typeof matched.matchScore === 'number') {
       detail.matchScore = matched.matchScore;
-      detail.scoreKind = 'workflow_match';
+      (detail as typeof detail & { scoreKind?: 'workflow_match' }).scoreKind = 'workflow_match';
     }
     if (matched.explanation) detail.explanation = matched.explanation;
     if (Array.isArray(matched.evidenceRefs)) {

@@ -1,4 +1,4 @@
-import type { RuntimeEvent, WorkflowStage } from '../types/search';
+import type { WorkflowStage } from '../types/search';
 
 /** 横条从左到右的阶段（不含 completed/failed） */
 export const RUN_STRIP_STAGES: WorkflowStage[] = [

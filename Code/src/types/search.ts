@@ -1,4 +1,4 @@
-/** 导师信息（临时定义，后续与爬虫同学对齐） */
+/** 主站导师展示契约；A/C 的字段差异由 D 服务端映射。 */
 export interface Advisor {
   id: string;
   name: string;

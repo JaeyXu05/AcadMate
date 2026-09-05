@@ -43,7 +43,7 @@ interface SearchState {
   splitRatio: number;
   /** 当前对话会话 id（用于 chat_history 分组），addUserMessage 时惰性生成 */
   sessionId: string;
-  /** 待恢复的检索/对话 query（由历史记录或云图联动写入，ChatWindow 消费后清空） */
+  /** 待恢复的检索/对话 query（由历史记录或云图联动写入，SearchPage 消费后清空） */
   pendingQuery: string | null;
   /** Harness 建议的下一 Skill（有匹配导师且无阅读记录 → paper_qa） */
   suggestedNextSkill: string | null;
@@ -51,7 +51,7 @@ interface SearchState {
   activeTraceId: string | null;
   clarificationPending: boolean;
   lastRunId: string | null;
-  /** Composer / 统一输入附带的 PDF upload_id（消费后清空） */
+  /** 统一输入附带的 PDF upload_id（消费后清空） */
   pendingUploadId: string | null;
 
   /** 用户发送消息，同时创建空的 agent 占位消息 */
@@ -77,7 +77,7 @@ interface SearchState {
   setSortBy: (sort: SortBy) => void;
   /** 记住拖拽分栏位置 */
   setSplitRatio: (ratio: number) => void;
-  /** 设置待恢复 query（ChatWindow 监听并自动发送） */
+  /** 设置待恢复 query（SearchPage 监听并自动发送） */
   setPendingQuery: (q: string | null) => void;
   /** 清空当前对话 */
   clearChat: () => void;

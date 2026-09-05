@@ -2,6 +2,9 @@
   "name": "advisor-platform",
   "private": true,
   "version": "1.0.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "concurrently -n front,back -c cyan,green \"vite\" \"tsx server/index.ts\"",
@@ -10,7 +13,8 @@
     "test": "npm run test:cloud",
     "test:cloud": "tsx --test server/routes/cloudData.test.ts server/data/mentorRetrieval.test.ts server/data/recommendRanking.test.ts server/data/topicBoilerplate.test.ts server/researchRuntime.test.ts src/utils/galaxyBackground.test.ts",
     "check": "npm run test && npm run build",
-    "build": "tsc -b && vite build",
+    "typecheck:server": "tsc -p tsconfig.server.json",
+    "build": "npm run typecheck:server && tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {

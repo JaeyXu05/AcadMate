@@ -71,7 +71,7 @@ function SearchPage() {
     setSortBy(defaultSort as SortBy);
   }, []);
 
-  // 云图 / 历史恢复的 pendingQuery：原 ChatWindow 消费，三栏后由本页接手
+  // 云图 / 历史恢复的 pendingQuery 统一由本页消费
   useEffect(() => {
     if (!pendingQuery) return;
     if (useSearchStore.getState().isStreaming) return;
@@ -331,7 +331,7 @@ function SearchPage() {
             <Empty
               description={
                 <span className="text-stone-400">
-                  描述你想找的导师方向（当前检索库 721 位 / 1747 条证据）
+                  描述你想找的导师方向（当前检索库 972 位 / 1969 条证据）
                 </span>
               }
               image={Empty.PRESENTED_IMAGE_SIMPLE}

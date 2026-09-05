@@ -135,7 +135,7 @@ class InputUnderstandingAgent:
                 _unique([*topics, *request.research_topics]),
                 methods,
                 applications,
-                semantic_query=_semantic_query(request.message, detected),
+                semantic_query=_semantic_query(normalized_message, detected),
             ),
         )
         clarification = None
@@ -252,8 +252,27 @@ _QUERY_PREFIX = re.compile(
     re.IGNORECASE,
 )
 _QUERY_SUFFIX = re.compile(r"(?:的)?(?:导师|老师|教授|博导)s?$", re.IGNORECASE)
+_COMMON_CHINESE_SURNAME = (
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜"
+    "戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费"
+    "廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄"
+    "和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董"
+    "梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡"
+    "凌霍虞万支柯管卢莫经房裘缪干解应宗丁宣邓郁单杭洪包诸左石崔吉龚"
+    "程嵇邢滑裴陆荣翁荀羊惠甄曲封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧"
+    "隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘钭厉戎祖武符刘景詹束龙"
+    "叶幸司韶郜黎蓟薄印宿白怀蒲台从鄂索咸籍赖卓蔺屠蒙池乔阴胥能苍双"
+    "闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍璩桑桂濮牛寿通边扈燕冀浦尚农温"
+    "别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘"
+    "匡国文寇广禄阙东欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶"
+    "空曾毋沙乜养鞠须丰巢关蒯相查后荆红游竺权逯盖益桓公"
+)
 _MENTOR_NAME_RE = re.compile(
-    r"(?:找|查|查看|介绍)\s*([\u4e00-\u9fff]{2,3})(?:老师|教授|导师|博导)"
+    # “图学习导师 / 强化学习导师” is a topic query, not a three-character
+    # Chinese person name. 老师/教授 is unambiguous; 导师/博导 additionally
+    # requires a surname-shaped two/three-character name.
+    rf"(?:找|查|查看|介绍)\s*(?:(?P<explicit>[\u4e00-\u9fff]{{2,3}})(?:老师|教授)|"
+    rf"(?P<role>[{_COMMON_CHINESE_SURNAME}][\u4e00-\u9fff]{{1,2}})(?:导师|博导))"
 )
 _DEPARTMENT_RE = re.compile(
     r"([\u4e00-\u9fffA-Za-z0-9·\-]{2,30}(?:学院|系(?!统)|研究院|实验室))"
@@ -261,7 +280,10 @@ _DEPARTMENT_RE = re.compile(
 
 
 def _constraints_from_message(message: str) -> dict[str, object]:
-    mentor_names = [match.group(1) for match in _MENTOR_NAME_RE.finditer(message)]
+    mentor_names = [
+        match.group("explicit") or match.group("role")
+        for match in _MENTOR_NAME_RE.finditer(message)
+    ]
     departments = [
         re.sub(r"^(?:找|在|来自)", "", match.group(1))
         for match in _DEPARTMENT_RE.finditer(message)
@@ -279,13 +301,18 @@ def _semantic_query(message: str, detected: dict[str, object]) -> str:
     text = " ".join(str(message or "").split()).strip()
     for department in detected.get("departments", []):
         text = text.replace(str(department), " ")
+    text = re.sub(r"(?:中国科学技术大学|中科大|\bUSTC\b)", " ", text, flags=re.IGNORECASE)
     for name in detected.get("mentor_names", []):
         text = re.sub(rf"(?:找|查|查看|介绍)\s*{re.escape(str(name))}(?:老师|教授|导师|博导)", " ", text)
     text = re.sub(r"(?:愿意|正在|可以|能)?(?:招收|招生|招|带).{0,10}(?:本科生|硕士|博士|研究生)", " ", text)
     text = re.sub(r"^(?:我会|我熟悉|我掌握|掌握|熟悉|会用)[^，,。；;]{1,100}[，,。；;]\s*", "", text)
     text = re.sub(r"^(?:想做|想研究|希望做|希望研究)\s*", "", text)
     text = re.sub(r"\s+", " ", text).strip(" ，,。；;的")
-    return text
+    # Freeze the research concept, not the search-box command surrounding it.
+    # Without this final unwrap, e.g. ``帮我找图学习导师`` became the concept
+    # ``帮我`` and a correctly retrieved graph-learning mentor was discarded by
+    # the semantic boundary gate.
+    return _bare_query_topic(text) or text
 
 
 def _topics_from_text(message: str) -> list[str]:

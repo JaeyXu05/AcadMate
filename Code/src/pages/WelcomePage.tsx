@@ -6,9 +6,9 @@ import KnowledgeGraphWatermark from '../components/shell/KnowledgeGraphWatermark
 import styles from './WelcomePage.module.css';
 
 const STATS = [
-  { value: '721', label: '入选导师' },
+  { value: '972', label: '入选导师' },
   { value: '11', label: '研究领域' },
-  { value: '1747', label: '结构化证据' },
+  { value: '1969', label: '结构化证据' },
   { value: '多智能体', label: '检索与审核' },
 ];
 

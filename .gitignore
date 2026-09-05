@@ -27,10 +27,6 @@ __pycache__/
 .ruff_cache/
 .coverage
 
-# ===== Claude 本地状态（含绝对路径、个人授权） =====
-.claude/settings.local.json
-.claude/agent-memory/
-
 # ===== 中间产物 / 草稿 =====
 paper-claw-master/data/*.log
 paper-claw-master/data/*.bak

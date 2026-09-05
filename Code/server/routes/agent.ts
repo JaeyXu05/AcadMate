@@ -246,7 +246,6 @@ function mapFinalMentor(m: any, index: number): any {
     ...(Array.isArray(candidate.evidence_refs) ? candidate.evidence_refs : []),
     ...(Array.isArray(match.evidence_refs) ? match.evidence_refs : []),
   ].filter((value, pos, all) => typeof value === 'string' && all.indexOf(value) === pos);
-  const retrieveMode = candidate.source_metadata?.retrieve_mode;
   const topicScore = Number(
     match.dimension_scores?.research_topic_match ?? match.total_score ?? 0,
   );
@@ -747,7 +746,7 @@ async function proxyToMentorAgent(
       }
     }
     const trustedGrowth = Number.isFinite(userId)
-      ? (loadTrustedAgentContext(userId).growth as Record<string, unknown>)
+      ? (loadTrustedAgentContext(userId).growth as unknown as Record<string, unknown>)
       : ((context.growth || {}) as Record<string, unknown>);
     return {
       ok: true,

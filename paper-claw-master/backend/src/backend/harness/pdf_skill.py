@@ -12,6 +12,7 @@ import json
 import re
 from typing import Any
 
+from openai import APIConnectionError, APITimeoutError
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
@@ -249,7 +250,15 @@ def _rerank_with_model(request: RunCreate, passages: list[dict[str, Any]], hits:
         {"role": "system", "content": system},
         {"role": "user", "content": "Return JSON matching required_json_schema.\n" + json.dumps(payload, ensure_ascii=False)},
     ]
-    raw = adapter.generate_text(provider, messages)
+    try:
+        raw = adapter.generate_text(provider, messages)
+    except (APIConnectionError, APITimeoutError):
+        # PDF analysis has a conservative, evidence-bound local reranker. A
+        # configured but temporarily unreachable gateway must not make this
+        # otherwise offline-capable feature unusable on a fresh deployment.
+        # Authentication, model-name and malformed-output errors still surface
+        # for correction instead of being hidden by this fallback.
+        return _rerank_without_model(request, passages, hits)
     return _parse_json_model(raw, PdfResearchAnalysis)
 
 

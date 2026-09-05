@@ -424,9 +424,9 @@ export function queueEmail(message: OutboxMessage): number {
 
 function parseEmailAttachments(value: unknown): EmailAttachmentInput[] {
   if (!Array.isArray(value)) return [];
-  return value.filter((item): item is EmailAttachmentInput => Boolean(item) && typeof item === 'object')
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
     .map((item) => {
-      const entry = item as Record<string, unknown>;
+      const entry = item;
       return {
         filename: String(entry.filename || '附件').slice(0, 180),
         contentBase64: String(entry.contentBase64 || ''),

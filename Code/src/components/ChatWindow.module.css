@@ -1,30 +1,3 @@
-.composerWrap {
-  flex-shrink: 0;
-}
-
-.chatFooter {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.attachRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.attachRowHint {
-  font-size: 12px;
-  color: #a8a29e;
-}
-
-.inputRow {
-  display: flex;
-  align-items: flex-end;
-  gap: 10px;
-}
-
 .bubble {
   max-width: 85%;
   padding: 10px 16px;

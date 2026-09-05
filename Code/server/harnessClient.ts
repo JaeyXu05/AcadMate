@@ -145,7 +145,10 @@ export async function postHarnessRun(body: Record<string, unknown>, timeoutMs = 
     throw err;
   }
   const context = (body?.context ?? {}) as { user_id?: unknown };
-  attachLlmOverrides(body, context.user_id);
+  const contextUserId = typeof context.user_id === 'number' || typeof context.user_id === 'string'
+    ? context.user_id
+    : null;
+  attachLlmOverrides(body, contextUserId);
   let runRes: Response;
   try {
     runRes = await fetch(agentUrl('/api/runs'), {

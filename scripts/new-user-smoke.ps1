@@ -35,6 +35,15 @@ function Get-ChineseText([int[]]$CodePoints) {
     return $builder.ToString()
 }
 
+$smokeToken = ''
+trap {
+    if ($smokeToken) {
+        try { Invoke-JsonRequest 'Delete' "$DBase/api/user/account" $null $smokeToken | Out-Null } catch { }
+    }
+    Write-Error $_
+    exit 1
+}
+
 Write-Host '==> New-user first-use smoke' -ForegroundColor Cyan
 $email = "smoke-$([Guid]::NewGuid().ToString('N').Substring(0, 10))@example.com"
 $password = 'smoke-first-use-123'
@@ -42,6 +51,7 @@ $password = 'smoke-first-use-123'
 # 1. First login auto-registers a brand-new account.
 $login = Invoke-JsonRequest 'Post' "$DBase/api/auth/login" @{ email = $email; password = $password }
 Assert-True ([bool]$login.token) 'New-user login did not return a token.'
+$smokeToken = $login.token
 Write-Host "[OK] New user registered and logged in (id=$($login.user.id))" -ForegroundColor Green
 
 # 2. Fill a minimal research profile (the onboarding step a real user does).
@@ -68,13 +78,19 @@ Assert-True ($recommend.needsOnboarding -eq $false) 'Recommendations still repor
 Assert-True (@($recommend.recommendations).Count -ge 1) 'New user got no mentor recommendations.'
 Write-Host "[OK] Recommendations returned $(@($recommend.recommendations).Count) mentors" -ForegroundColor Green
 
-# 4. Model-backed research profile must complete and pass review.
-$sw = [Diagnostics.Stopwatch]::StartNew()
-$profileResult = Invoke-JsonRequest 'Post' "$DBase/api/user/research-profile" $null $login.token
-$sw.Stop()
-Assert-True ($profileResult.profile.type -eq 'research_profile') 'Research profile artifact type is wrong.'
-Assert-True ($profileResult.profile.review_status -eq 'PASS') 'Research profile did not pass review.'
-Write-Host "[OK] Research profile PASS in $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor Green
+# 4. A brand-new account has no private model credential. The real product
+# contract is an explicit 428 with a settings action, never a fake local model
+# success or silent use of another user's key.
+$profileBlocked = $false
+try {
+    Invoke-JsonRequest 'Post' "$DBase/api/user/research-profile" $null $login.token | Out-Null
+} catch {
+    $statusCode = 0
+    if ($_.Exception.Response) { $statusCode = [int]$_.Exception.Response.StatusCode }
+    if ($statusCode -eq 428) { $profileBlocked = $true } else { throw }
+}
+Assert-True $profileBlocked 'A new account without API settings did not receive the required 428 precondition response.'
+Write-Host '[OK] Account-local model credential gate returned 428 as designed' -ForegroundColor Green
 
 # 5. Merged PDF analysis through A must not fail on semantic infrastructure.
 $pdfBody = @{
@@ -115,6 +131,7 @@ Write-Host '[OK] Merged PDF analysis PASS' -ForegroundColor Green
 
 # Cleanup the temporary account (cascade removes its data).
 try { Invoke-JsonRequest 'Delete' "$DBase/api/user/account" $null $login.token | Out-Null } catch { }
+$smokeToken = ''
 
 Write-Host ''
 Write-Host 'All new-user first-use checks passed.' -ForegroundColor Green

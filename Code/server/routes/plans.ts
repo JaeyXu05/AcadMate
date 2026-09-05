@@ -237,7 +237,7 @@ plansRouter.post('/suggest/:runId/cancel', async (req: AuthRequest, res: Respons
 plansRouter.post('/suggest/apply', (req: AuthRequest, res: Response) => {
   try {
     ensureProductivitySchema(getDb());
-    const rows = Array.isArray(req.body?.plan_drafts) ? req.body.plan_drafts.slice(0, 8) : [];
+    const rows: unknown[] = Array.isArray(req.body?.plan_drafts) ? req.body.plan_drafts.slice(0, 8) : [];
     if (!rows.length) { res.status(400).json({ message: '没有可应用的计划拆解' }); return; }
     const create = getDb().prepare(
       `INSERT INTO plans
