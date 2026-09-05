@@ -108,6 +108,7 @@ export interface SseEvent {
   content?: string;
   advisors?: Advisor[];
   message?: string;
+  code?: string;
   event_type?: string;
   summary?: string;
   sender?: string;

@@ -1,4 +1,4 @@
-import api from './axios';
+import api, { emitApiSettingsRequired } from './axios';
 
 export type ConversationSurface = 'search' | 'research';
 
@@ -103,7 +103,13 @@ export async function streamConversationMessage(
     const body = await response.text().catch(() => '');
     let detail = body;
     try {
-      const payload = JSON.parse(body) as { message?: unknown; error?: unknown };
+      const payload = JSON.parse(body) as { code?: unknown; message?: unknown; error?: unknown; action?: { path?: unknown } };
+      if (response.status === 428 && payload.code === 'API_SETTINGS_REQUIRED') {
+        emitApiSettingsRequired({
+          message: typeof payload.message === 'string' ? payload.message : undefined,
+          path: typeof payload.action?.path === 'string' ? payload.action.path : undefined,
+        });
+      }
       detail = [payload.message, payload.error].find((item) => typeof item === 'string' && item.trim()) as string || body;
     } catch { /* 非 JSON 错误正文原样保留 */ }
     throw new Error(detail || `请求失败（HTTP ${response.status}）`);

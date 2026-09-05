@@ -35,7 +35,7 @@ function ApiSettingsPage() {
   }, [message]);
 
   const handleSave = async () => {
-    if (!baseUrl.trim() || !model.trim()) {
+    if (enabled && (!baseUrl.trim() || !model.trim())) {
       message.warning('请填写 API 地址和模型名称');
       return;
     }
@@ -65,6 +65,7 @@ function ApiSettingsPage() {
     setSaving(true);
     try {
       await updateUserApiSettings({ remove_key: true });
+      setEnabled(false);
       setApiKeySaved(false);
       setApiKey('');
       message.success('已清除保存的 API Key');
@@ -83,15 +84,15 @@ function ApiSettingsPage() {
           type="info"
           showIcon
           style={{ marginBottom: 16 }}
-          message="平台默认 API 由启动向导写入（BASE_URL / MODEL / API_KEY）。"
-          description="你可以在本页为当前登录账号单独覆盖：开启后，科研对话、画像、PDF 合并分析、计划和报告会优先使用你自己的 API 地址与 Key，且不会影响其他账号。"
+          message="API 配置不是启动项目的必填项。"
+          description="不配置也可以使用导师检索、星图等离线功能。科研对话、画像和论文智能阅读需要模型时会引导你回到本页；配置按当前账号加密保存，不写入共享 .env，也不会影响其他账号。"
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div>
               <div>启用我自己的模型 API</div>
               <div style={{ fontSize: 12, color: '#78716c' }}>
-                关闭时使用平台默认配置（若已配置）
+                关闭后模型功能不会使用已保存的 Key，离线功能不受影响
               </div>
             </div>
             <Switch checked={enabled} onChange={setEnabled} />

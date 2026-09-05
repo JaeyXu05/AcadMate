@@ -5,7 +5,12 @@ import { loadGrowthState, loadTrustedAgentContext } from '../data/growthStore';
 import { postHarnessRun } from '../harnessClient';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { explainResearchProfileError, researchProfileTimeoutMs } from '../researchRuntime';
-import { getLlmApiSettings, saveLlmApiSettings } from '../services/llmSettings';
+import {
+  apiSettingsRequired,
+  getLlmApiSettings,
+  hasUsableLlmSettings,
+  saveLlmApiSettings,
+} from '../services/llmSettings';
 
 export const userRouter = Router();
 
@@ -132,6 +137,7 @@ userRouter.get('/research-profile', (req: AuthRequest, res: Response) => {
 
 /** GET /api/user/api-settings — 当前登录用户自己的大模型 API 配置（不回传明文 key）。 */
 userRouter.get('/api-settings', (req: AuthRequest, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
   const settings = getLlmApiSettings(req.userId!);
   res.json({
     enabled: settings.enabled,
@@ -144,6 +150,7 @@ userRouter.get('/api-settings', (req: AuthRequest, res: Response) => {
 
 /** PUT /api/user/api-settings — 保存当前用户自己的大模型 API 配置。 */
 userRouter.put('/api-settings', (req: AuthRequest, res: Response) => {
+  res.setHeader('Cache-Control', 'no-store');
   const body = (req.body ?? {}) as {
     enabled?: unknown;
     base_url?: unknown;
@@ -151,8 +158,21 @@ userRouter.put('/api-settings', (req: AuthRequest, res: Response) => {
     api_key?: unknown;
     remove_key?: unknown;
   };
+  const current = getLlmApiSettings(req.userId!, true);
+  const enabling = body.remove_key === true
+    ? false
+    : (body.enabled === undefined ? current.enabled : Boolean(body.enabled));
+  const nextBaseUrl = body.base_url === undefined ? current.baseUrl : String(body.base_url || '').trim();
+  const nextModel = body.model === undefined ? current.model : String(body.model || '').trim();
+  const nextApiKey = body.remove_key === true
+    ? ''
+    : (body.api_key === undefined ? current.apiKey : String(body.api_key || '').trim());
+  if (enabling && (!nextBaseUrl || !nextModel || !nextApiKey)) {
+    res.status(400).json({ message: '启用前必须完整填写 API 地址、模型名称和 API Key' });
+    return;
+  }
   const settings = saveLlmApiSettings(req.userId!, {
-    enabled: body.enabled === undefined ? undefined : Boolean(body.enabled),
+    enabled: enabling,
     baseUrl: body.base_url === undefined ? undefined : String(body.base_url || ''),
     model: body.model === undefined ? undefined : String(body.model || ''),
     apiKey: body.api_key === undefined ? undefined : String(body.api_key || ''),
@@ -169,6 +189,10 @@ userRouter.put('/api-settings', (req: AuthRequest, res: Response) => {
 
 /** POST /api/user/research-profile — 用 A 端真实模型生成证据受限的科研画像。 */
 userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => {
+  if (!hasUsableLlmSettings(req.userId!)) {
+    res.status(428).json(apiSettingsRequired('科研画像生成'));
+    return;
+  }
   const context = loadTrustedAgentContext(req.userId!);
   const signature = researchProfileSignature(context);
   try {

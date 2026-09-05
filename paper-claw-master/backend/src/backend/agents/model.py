@@ -41,6 +41,11 @@ def runtime_model(request: ModelRequest):
     http_client = _http_client_for_base_url(context.base_url, context.timeout)
     if http_client is not None:
         kwargs["http_client"] = http_client
+        # Research chat runs through the async agent path. Passing only the
+        # sync client leaves LangChain's async transport on its default
+        # proxy/TLS profile, which can sit in httpx's connection pool for 30s
+        # even though the gateway readiness probe succeeds.
+        kwargs["http_async_client"] = _http_async_client_for_base_url(context.base_url, context.timeout)
     return ChatOpenAI(**kwargs)
 
 
@@ -60,7 +65,21 @@ def _http_client_for_base_url(base_url: str | None, timeout_seconds: int) -> htt
     return httpx.Client(
         verify=tls_context,
         trust_env=False,
-        timeout=timeout_seconds,
+        timeout=httpx.Timeout(timeout_seconds, pool=5.0),
+    )
+
+
+def _http_async_client_for_base_url(base_url: str | None, timeout_seconds: int) -> httpx.AsyncClient | None:
+    """Async counterpart used by the research Agent's model calls."""
+    if not base_url or urlparse(base_url).hostname != _USTC_LLM_HOST:
+        return None
+    tls_context = ssl.create_default_context()
+    tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    tls_context.maximum_version = ssl.TLSVersion.TLSv1_2
+    return httpx.AsyncClient(
+        verify=tls_context,
+        trust_env=False,
+        timeout=httpx.Timeout(timeout_seconds, pool=5.0),
     )
 
 

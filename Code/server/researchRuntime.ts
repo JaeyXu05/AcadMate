@@ -27,14 +27,20 @@ export function researchAgentOverrides(surface: string): {
   max_tokens?: number;
   timeout?: number;
   max_retries?: number;
+  extra_body?: Record<string, unknown>;
 } {
   if (surface !== 'research') return {};
-  // AgentMessageRequest defaults timeout to 60s and max_retries to 2.  Those
-  // request defaults take precedence over A's configured values, so make the
-  // research contract explicit: model-backed research chat gets the same
-  // 120s/2-retry policy as the A-side default instead of the old 35s/0-retry
-  // override.
-  return { max_tokens: 2200, timeout: 120, max_retries: 2 };
+  // Keep the interactive path bounded. The UI asks for a concise answer, and
+  // disabling provider-side hidden reasoning avoids spending most of the
+  // request budget before the first visible token on gateways that support it.
+  // Do not retry a synchronous chat request: a retry doubles the visible wait
+  // when the gateway is slow or temporarily unavailable.
+  return {
+    max_tokens: 1200,
+    timeout: 90,
+    max_retries: 0,
+    extra_body: { thinking: { type: 'disabled' } },
+  };
 }
 
 export function explainResearchStreamError(
@@ -58,7 +64,7 @@ export function explainResearchStreamError(
       message: '科研模型网关连接失败。请检查当前网络、Base URL 及代理设置；API Key 保存成功并不代表上游网关当前可达。',
     };
   }
-  if (/401|403|unauthorized|invalid.*(api|key)|api key.*(invalid|missing)|authentication/i.test(raw)) {
+  if (/401|403|unauthorized|invalid.*(api|key)|api[\s_-]?key.*(invalid|missing|unavailable)|authentication/i.test(raw)) {
     return {
       timedOut: false,
       message: '科研模型 API 鉴权失败。请确认 API Key 有效，并确认它属于当前 Base URL 对应的服务。',
@@ -96,7 +102,7 @@ export function explainResearchProfileError(
       message: '科研画像模型网关连接失败。请检查当前网络、Base URL 及代理设置；API Key 保存成功并不代表上游网关当前可达。',
     };
   }
-  if (/401|403|unauthorized|invalid.*(api|key)|api key.*(invalid|missing)|authentication/i.test(raw)) {
+  if (/401|403|unauthorized|invalid.*(api|key)|api[\s_-]?key.*(invalid|missing|unavailable)|authentication/i.test(raw)) {
     return {
       timedOut: false,
       message: '科研画像模型 API 鉴权失败。请确认 API Key 有效，并确认它属于当前 Base URL 对应的服务。',

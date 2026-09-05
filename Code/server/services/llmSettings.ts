@@ -25,12 +25,40 @@ interface UserSettingsRow {
   llm_updated_at?: string;
 }
 
+const UNSAFE_CREDENTIAL_SECRETS = new Set([
+  '',
+  'replace-with-a-long-random-secret',
+  'dev-secret-change-me',
+  'secret',
+  'changeme',
+  'change-me',
+  'your-secret-key',
+]);
+
+function configuredCredentialSecret(value: unknown): string {
+  const text = String(value ?? '').trim();
+  return text.length >= 16 && !UNSAFE_CREDENTIAL_SECRETS.has(text.toLowerCase()) ? text : '';
+}
+
 function credentialKey(): Buffer {
   const secret =
-    process.env.MAIL_CREDENTIAL_KEY
-    || process.env.JWT_SECRET
-    || 'local-llm-credential-key';
+    configuredCredentialSecret(process.env.MAIL_CREDENTIAL_KEY)
+    || configuredCredentialSecret(process.env.JWT_SECRET);
+  if (!secret) {
+    throw new Error('缺少安全的本地凭据加密密钥，请重新启动服务以生成 JWT_SECRET');
+  }
   return createHash('sha256').update(secret).digest();
+}
+
+function decryptWithKey(value: string, key: Buffer): string {
+  const [ivText, tagText, encryptedText] = value.split('.');
+  if (!ivText || !tagText || !encryptedText) return '';
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivText, 'base64'));
+  decipher.setAuthTag(Buffer.from(tagText, 'base64'));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedText, 'base64')),
+    decipher.final(),
+  ]).toString('utf8');
 }
 
 export function encryptLlmApiKey(value: string): string {
@@ -41,19 +69,27 @@ export function encryptLlmApiKey(value: string): string {
   return `${iv.toString('base64')}.${tag.toString('base64')}.${encrypted.toString('base64')}`;
 }
 
-export function decryptLlmApiKey(value: unknown): string {
+function decryptLlmApiKeyResult(value: unknown): { apiKey: string; legacy: boolean } {
+  const encrypted = String(value || '');
   try {
-    const [ivText, tagText, encryptedText] = String(value || '').split('.');
-    if (!ivText || !tagText || !encryptedText) return '';
-    const decipher = createDecipheriv('aes-256-gcm', credentialKey(), Buffer.from(ivText, 'base64'));
-    decipher.setAuthTag(Buffer.from(tagText, 'base64'));
-    return Buffer.concat([
-      decipher.update(Buffer.from(encryptedText, 'base64')),
-      decipher.final(),
-    ]).toString('utf8');
+    return { apiKey: decryptWithKey(encrypted, credentialKey()), legacy: false };
   } catch {
-    return '';
+    // Compatibility for records created when the public .env.example value
+    // was accidentally accepted as an encryption key. New writes never use it.
+    try {
+      return {
+        apiKey: decryptWithKey(
+          encrypted,
+          createHash('sha256').update('replace-with-a-long-random-secret').digest(),
+        ),
+        legacy: true,
+      };
+    } catch { return { apiKey: '', legacy: false }; }
   }
+}
+
+export function decryptLlmApiKey(value: unknown): string {
+  return decryptLlmApiKeyResult(value).apiKey;
 }
 
 function rowFor(userId: number): UserSettingsRow | undefined {
@@ -65,7 +101,13 @@ function rowFor(userId: number): UserSettingsRow | undefined {
 export function getLlmApiSettings(userId: number, includeSecret = false): LlmApiSettings {
   const row = rowFor(userId);
   const encrypted = row?.llm_api_key_encrypted || '';
-  const apiKey = includeSecret ? decryptLlmApiKey(encrypted) : undefined;
+  const decrypted = includeSecret ? decryptLlmApiKeyResult(encrypted) : undefined;
+  const apiKey = decrypted?.apiKey;
+  if (decrypted?.legacy && apiKey) {
+    getDb().prepare(
+      "UPDATE user_settings SET llm_api_key_encrypted=?, llm_updated_at=datetime('now','localtime') WHERE user_id=?",
+    ).run(encryptLlmApiKey(apiKey), userId);
+  }
   return {
     enabled: Boolean(row?.llm_enabled),
     baseUrl: String(row?.llm_base_url || '').trim(),
@@ -117,6 +159,21 @@ export function llmOverridesForUser(userId: number): LlmProviderOverrides | null
     llm_api_key: settings.apiKey,
     llm_base_url: settings.baseUrl,
     llm_model: settings.model,
+  };
+}
+
+export const API_SETTINGS_REQUIRED_CODE = 'API_SETTINGS_REQUIRED';
+export const API_SETTINGS_PATH = '/api-settings';
+
+export function hasUsableLlmSettings(userId: number): boolean {
+  return llmOverridesForUser(userId) !== null;
+}
+
+export function apiSettingsRequired(feature = '此功能') {
+  return {
+    code: API_SETTINGS_REQUIRED_CODE,
+    message: `${feature}需要模型 API。请先为当前账号填写 API 地址、模型名称和 API Key。`,
+    action: { label: '前往 API 设置', path: API_SETTINGS_PATH },
   };
 }
 

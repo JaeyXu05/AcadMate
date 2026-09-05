@@ -238,7 +238,7 @@ function CloudPage() {
                 <span><strong>{visibleNodes.length}</strong> 节点</span>
                 <span><strong>{visibleEdges.length}</strong> 同领域近邻</span>
               </div>
-              <div className={styles.instructions}>拖拽旋转 · 滚轮缩放 · 点击查看导师 · 按 0 重置</div>
+              <div className={styles.instructions}>左键拖拽旋转 · 右键 / Shift+左键 / 空格+左键平移 · 滚轮缩放 · 点击查看导师 · 按 0 重置</div>
             </>
           )}
         </section>

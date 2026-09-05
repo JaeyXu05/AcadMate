@@ -87,7 +87,11 @@ def test_agent_context_request_model_falls_back_to_settings_provider(monkeypatch
     try:
         context = _agent_context(
             PreparedAgentRun(thread_id=1, run_id=2, deepagent_thread_id="thread-1", active_paper_id=None, active_paper_system_info=None),
-            AgentMessageRequest(message="hello", model="request-model"),
+            AgentMessageRequest(
+                message="hello",
+                model="request-model",
+                extra_body={"thinking": {"type": "disabled"}, "request_flag": True},
+            ),
         )
     finally:
         clear_settings_cache()
@@ -98,6 +102,7 @@ def test_agent_context_request_model_falls_back_to_settings_provider(monkeypatch
     assert context.temperature == 0.4
     assert context.max_tokens == 1234
     assert context.extra_body["thinking"] == {"type": "disabled"}
+    assert context.extra_body["request_flag"] is True
 
 
 def test_agent_context_request_provider_overrides_settings(monkeypatch):

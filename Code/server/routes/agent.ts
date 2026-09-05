@@ -21,7 +21,7 @@ import {
 import { persistUploadedPdf, loadResearchDocument } from '../data/researchDocuments';
 import { cleanTopics } from '../data/topicBoilerplate';
 import { getDb } from '../db';
-import { getLlmApiSettings } from '../services/llmSettings';
+import { apiSettingsRequired, getLlmApiSettings, hasUsableLlmSettings } from '../services/llmSettings';
 import { ragStore, ragData, reliablePublicationTotal, toLightAdvisor } from '../data/ragAdvisors';
 import { retrieveQualifiedMentors, reviewMatches, relevanceThreshold, keepDisplayableAdvisors, longTermInterestTerms } from '../data/mentorRetrieval';
 import { extractPdfPages, extractPdfText } from './pdfText';
@@ -881,6 +881,11 @@ agentRouter.post('/chat', (req: AuthRequest, res: Response) => {
 
   (async () => {
     if (!resume_trace_id && shouldUsePlainConversation(message)) {
+      if (!hasUsableLlmSettings(userId)) {
+        sse(res, 'error', { type: 'error', ...apiSettingsRequired('智能对话') });
+        res.end();
+        return;
+      }
       sse(res, 'thinking', { type: 'thinking', content: '先正常聊聊，不启动导师检索。' });
       const plain = await proxyToPaperClawChat(userId, message, (text) => {
         if (!aborted.cancelled && text) sse(res, 'summary', { type: 'summary', content: text });
@@ -1111,6 +1116,10 @@ agentRouter.post('/read', async (req: AuthRequest, res: Response) => {
     res.status(400).json({ message: '请提供 candidate_id' });
     return;
   }
+  if (!hasUsableLlmSettings(req.userId!)) {
+    res.status(428).json(apiSettingsRequired('论文智能阅读'));
+    return;
+  }
   try {
     const result = await runHarnessSkill({
       userId: req.userId!,
@@ -1166,6 +1175,11 @@ agentRouter.post('/paper-upload', paperUpload.single('file'), async (req: AuthRe
   if (!candidateId) {
     await fs.promises.unlink(file.path).catch(() => {});
     res.status(400).json({ message: '请提供 candidate_id' });
+    return;
+  }
+  if (!req.body?.paper_id && !hasUsableLlmSettings(req.userId!)) {
+    await fs.promises.unlink(file.path).catch(() => {});
+    res.status(428).json(apiSettingsRequired('论文智能阅读'));
     return;
   }
   if (!agentBase()) {

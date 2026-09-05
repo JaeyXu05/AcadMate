@@ -10,12 +10,6 @@ if not "%EXIT_CODE%"=="0" (
 )
 
 echo.
-set /p "SETUP_API=Do you want to launch the app and configure your own LLM API now? [Y/n]: "
-if /I "%SETUP_API%"=="Y" (
-  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-project.ps1" -LaunchOnly -ConfigureApi
-) else if /I "%SETUP_API%"=="" (
-  powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start-project.ps1" -LaunchOnly -ConfigureApi
-) else (
-  echo API setup skipped. Run start-project.ps1 -LaunchOnly -ConfigureApi later.
-)
+echo Environment preparation completed. API configuration is optional.
+echo Run 启动项目.bat, then configure a private API for the logged-in account only when a model feature is needed.
 exit /b 0

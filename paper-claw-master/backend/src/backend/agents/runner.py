@@ -541,7 +541,7 @@ def _agent_context(prepared: PreparedAgentRun, request: AgentMessageRequest) -> 
         max_tokens=max_tokens,
         timeout=timeout,
         max_retries=max_retries,
-        extra_body=settings.chat_extra_body,
+        extra_body=request.extra_body if request.extra_body is not None else settings.chat_extra_body,
         rate_limiter=_chat_rate_limiter(settings),
         chat_provider_name=provider_name,
         extra_instructions=extra_instructions,

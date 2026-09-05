@@ -1,6 +1,8 @@
-/* Interactive LLM API setup.
+/* Optional platform-wide LLM API setup for an administrator/developer.
  *
- * Asks for BASE_URL / MODEL / API_KEY and writes them to paper-claw-master/.env.
+ * Normal users should use the authenticated API Settings page instead. This
+ * script asks for BASE_URL / MODEL / API_KEY and writes a shared fallback to
+ * paper-claw-master/.env only when explicitly invoked.
  * Usage:
  *   node scripts/configure-api.cjs [envPath]
  *   node scripts/configure-api.cjs [envPath] --base URL --model MODEL --api-key KEY

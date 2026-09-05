@@ -6,7 +6,7 @@ from backend.harness.contracts import RunCreate
 from backend.harness.profile_skill import _generate_profile
 
 
-def test_profile_generation_retries_once_for_transient_gateway_reset(monkeypatch):
+def test_profile_generation_avoids_a_second_visible_wait_on_gateway_failure(monkeypatch):
     captured = {}
 
     def fake_generate_text(self, provider, messages):
@@ -51,4 +51,4 @@ def test_profile_generation_retries_once_for_transient_gateway_reset(monkeypatch
     assert captured["provider"].model == "probe-model"
     assert captured["provider"].base_url == "http://model.invalid/v1"
     assert captured["provider"].api_key == "probe-secret"
-    assert captured["provider"].settings["max_retries"] == 1
+    assert captured["provider"].settings["max_retries"] == 0

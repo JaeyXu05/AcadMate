@@ -10,11 +10,12 @@ import {
   researchAgentTimeoutMs,
 } from './researchRuntime';
 
-test('research chat keeps the output budget and inherits A-side timeout policy', () => {
+test('research chat keeps a bounded interactive output budget without retries', () => {
   assert.deepEqual(researchAgentOverrides('research'), {
-    max_tokens: 2200,
-    timeout: 120,
-    max_retries: 2,
+    max_tokens: 1200,
+    timeout: 90,
+    max_retries: 0,
+    extra_body: { thinking: { type: 'disabled' } },
   });
   assert.deepEqual(researchAgentOverrides('search'), {});
   assert.equal(researchAgentTimeoutMs({}), 180_000);
@@ -51,6 +52,7 @@ test('upstream connection failures become actionable without exposing credential
 
 test('upstream authentication and model errors get distinct guidance', () => {
   assert.match(explainResearchStreamError(new Error('401 Unauthorized')).message, /鉴权失败/);
+  assert.match(explainResearchStreamError(new Error('api_key_unavailable')).message, /鉴权失败/);
   assert.match(explainResearchStreamError(new Error('configured_model_unavailable')).message, /模型或接口不存在/);
 });
 

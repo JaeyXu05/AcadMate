@@ -280,7 +280,23 @@ function Apply-Migrations([string]$Docker, [string]$Uv) {
     $versionsDir = Join-Path $BackendRoot 'migrations\versions'
     $latestMigration = (Get-ChildItem -LiteralPath $versionsDir -Filter '*.py' -File | Sort-Object Name -Descending | Select-Object -First 1).BaseName
     if (-not $latestMigration) { Stop-Startup 'No Alembic migration revision was found.' }
-    $currentMigration = (& $Docker compose --project-name $Config.ComposeProject -f (Join-Path $PaperRoot 'docker-compose.yml') exec -T postgres psql -U paper_claw -d paper_claw -Atc 'SELECT version_num FROM alembic_version LIMIT 1;' 2>$null).Trim()
+    $composeFile = Join-Path $PaperRoot 'docker-compose.yml'
+    # A brand-new PostgreSQL volume has no alembic_version table yet. Do not
+    # query that table directly: with PowerShell's strict native-error handling
+    # PostgreSQL's expected "relation does not exist" stderr aborts the launcher
+    # before Alembic gets a chance to create the schema.
+    $tableProbe = "`"$Docker`" compose --project-name $($Config.ComposeProject) -f `"$composeFile`" exec -T postgres psql -U paper_claw -d paper_claw -Atc `"SELECT to_regclass('public.alembic_version')::text;`" 2>nul"
+    $versionTable = ((& $env:ComSpec /d /c $tableProbe) -join "`n").Trim()
+    $tableProbeExitCode = $LASTEXITCODE
+    if ($tableProbeExitCode -ne 0) { Stop-Startup 'Could not inspect the PostgreSQL migration state. Check Docker Desktop and the postgres container.' }
+    $currentMigration = ''
+    if ($versionTable) {
+        $versionQuery = "`"$Docker`" compose --project-name $($Config.ComposeProject) -f `"$composeFile`" exec -T postgres psql -U paper_claw -d paper_claw -Atc `"SELECT version_num FROM public.alembic_version LIMIT 1;`" 2>nul"
+        $currentMigration = ((& $env:ComSpec /d /c $versionQuery) -join "`n").Trim()
+        if ($LASTEXITCODE -ne 0) { Stop-Startup 'Could not read the PostgreSQL migration version. Check Docker Desktop and the postgres container.' }
+    } else {
+        Write-Warn 'Alembic version table is absent; applying the initial database migrations.'
+    }
     if ($currentMigration -eq $latestMigration) { Write-Ok "Database migrations are current ($currentMigration)"; return }
     Write-Step 'Applying database migrations (a first database can take up to 2 minutes)'
     Write-Host "  Detailed output: $migrationLog"
@@ -295,12 +311,38 @@ function Apply-Migrations([string]$Docker, [string]$Uv) {
         # directly: on Windows, wrapping it in `uv run` can leave a child process
         # alive before Alembic opens a database connection, which blocks later starts.
         $command = "`"$alembic`" -c backend/alembic.ini upgrade head 1>>`"$migrationLog`" 2>&1"
-        & $env:ComSpec /d /c $command
-        $migrationExitCode = $LASTEXITCODE
+        $previousDatabaseUrl = [Environment]::GetEnvironmentVariable('PAPER_CLAW_DATABASE_URL', 'Process')
+        # migrations/env.py resolves the database URL from the process
+        # environment. Pass the same URL that was read from paper-claw-master/.env
+        # so a remote deployment with a non-default port or host is not migrated
+        # against localhost:5432 by accident.
+        $env:PAPER_CLAW_DATABASE_URL = $Config.DatabaseUrl
+        try {
+            & $env:ComSpec /d /c $command
+            $migrationExitCode = $LASTEXITCODE
+        } finally {
+            if ($null -eq $previousDatabaseUrl) {
+                Remove-Item Env:PAPER_CLAW_DATABASE_URL -ErrorAction SilentlyContinue
+            } else {
+                $env:PAPER_CLAW_DATABASE_URL = $previousDatabaseUrl
+            }
+        }
         Get-Content -LiteralPath $migrationLog -Tail 80
         if ($migrationExitCode -ne 0) { Stop-Startup "Database migration failed (exit code $migrationExitCode). See $migrationLog" }
     } finally { Pop-Location }
-    Write-Ok 'Database migrations are current'
+    # Verify the post-migration state as a separate step. A successful Alembic
+    # process must also leave the expected revision in the same database that
+    # the launcher inspected above.
+    $verifyTableProbe = "`"$Docker`" compose --project-name $($Config.ComposeProject) -f `"$composeFile`" exec -T postgres psql -U paper_claw -d paper_claw -Atc `"SELECT to_regclass('public.alembic_version')::text;`" 2>nul"
+    $verifiedVersionTable = ((& $env:ComSpec /d /c $verifyTableProbe) -join "`n").Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $verifiedVersionTable) { Stop-Startup 'Migration command completed but alembic_version is still absent. Check the migration log and database connection.' }
+    $verifyVersionQuery = "`"$Docker`" compose --project-name $($Config.ComposeProject) -f `"$composeFile`" exec -T postgres psql -U paper_claw -d paper_claw -Atc `"SELECT version_num FROM public.alembic_version LIMIT 1;`" 2>nul"
+    $verifiedMigration = ((& $env:ComSpec /d /c $verifyVersionQuery) -join "`n").Trim()
+    if ($LASTEXITCODE -ne 0) { Stop-Startup 'Migration command completed but the final migration version could not be read.' }
+    if ($verifiedMigration -ne $latestMigration) {
+        Stop-Startup "Migration completed but database revision is '$verifiedMigration' (expected '$latestMigration'). Check the migration log before starting services."
+    }
+    Write-Ok "Database migrations are current ($verifiedMigration)"
 }
 
 function Invoke-Json([string]$Url, [int]$TimeoutSeconds = 3) { try { return (Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec $TimeoutSeconds).Content | ConvertFrom-Json } catch { return $null } }
@@ -358,16 +400,12 @@ try {
         $tools = Ensure-Node; Test-RuntimeData $tools.Node; $tools.Uv = Ensure-Uv; $tools.Docker = Ensure-Docker; Assert-PreparedEnvironment
         Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv
         Ensure-SemanticIndex (Join-Path $BackendRoot '.venv\Scripts\python.exe')
-        $paperEnv = Join-Path $PaperRoot '.env'
-        $hasChatBase = Get-EnvValue $paperEnv 'PAPER_CLAW_CHAT_BASE_URL' ''
-        $hasChatModel = Get-EnvValue $paperEnv 'PAPER_CLAW_CHAT_MODEL' ''
-        $hasChatKey = Get-EnvValue $paperEnv 'PAPER_CLAW_CHAT_API_KEY' ''
-        $needsChatConfig = -not ($hasChatBase -and $hasChatModel -and $hasChatKey)
-        if ($ConfigureApi -or ($needsChatConfig -and -not $SkipInstall)) {
+        if ($ConfigureApi) {
+            $paperEnv = Join-Path $PaperRoot '.env'
             # Configure before A starts; stop an old A so the fresh values load.
             $existingA = Get-NetTCPConnection -State Listen -LocalPort $Config.APort -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($existingA) { Stop-Process -Id $existingA.OwningProcess -Force -ErrorAction SilentlyContinue }
-            Write-Step 'Configure LLM API (API_KEY / BASE_URL / MODEL)'
+            Write-Step 'Configure optional platform-wide LLM API (API_KEY / BASE_URL / MODEL)'
             & $tools.Node (Join-Path $PSScriptRoot 'configure-api.cjs') $paperEnv
             if ($LASTEXITCODE -ne 0) { Stop-Startup 'LLM API configuration was not saved.' }
         }
@@ -385,7 +423,7 @@ try {
         Ensure-Dependencies $tools.Npm $tools.Uv; Ensure-DockerEngine $tools.Docker; Start-Postgres $tools.Docker; Apply-Migrations $tools.Docker $tools.Uv
         Ensure-SemanticIndex (Join-Path $BackendRoot '.venv\Scripts\python.exe')
         Write-Host "`nEnvironment preparation completed. Use 启动项目.bat to start and verify the application." -ForegroundColor Green
-        Write-Host "Tip: run 启动项目.bat -ConfigureApi once after launch to set the logged-in account's own LLM API." -ForegroundColor Yellow
+        Write-Host "LLM API is optional. After login, each user can save a private API configuration from the API Settings page." -ForegroundColor Yellow
     }
     exit 0
 } catch {

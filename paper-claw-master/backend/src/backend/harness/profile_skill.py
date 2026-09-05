@@ -222,16 +222,15 @@ def _generate_profile(
     provider = provider_for_run(request).model_copy(deep=True)
     provider.settings = {
         **provider.settings,
-        "max_tokens": min(settings.chat_max_tokens, 1800),
+        "max_tokens": min(settings.chat_max_tokens, 1400),
         # The DeepSeek-class model can spend 20-60s producing a structured
         # profile.  The old 22s cap turned valid slow responses into false
         # timeouts, so keep the provider-configured budget (120s by default)
         # instead of inventing a shorter local ceiling.
         "timeout": float(provider.settings.get("timeout") or settings.chat_timeout_seconds),
-        # A reset before response headers is transient on some gateways. Keep
-        # one retry for this synchronous research-profile call while keeping
-        # the total D-side request budget bounded.
-        "max_retries": 1,
+        # Do not retry a synchronous profile call: a retry doubles the visible
+        # wait on a broken gateway. The user can explicitly start it again.
+        "max_retries": 0,
         "response_format": {"type": "json_object"},
         # DeepSeek v4 defaults to emitting a long reasoning_content before the
         # JSON; when reasoning exhausts the token budget, content stays empty

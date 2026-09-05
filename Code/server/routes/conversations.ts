@@ -1,8 +1,8 @@
 import { Router, Response } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getDb } from '../db';
-import { agentBase, agentUrl, probeAgent, probeResearchChat } from '../harnessClient';
-import { getLlmApiSettings } from '../services/llmSettings';
+import { agentBase, agentUrl, probeAgent } from '../harnessClient';
+import { apiSettingsRequired, getLlmApiSettings, hasUsableLlmSettings } from '../services/llmSettings';
 import {
   RESEARCH_ASSISTANT_INSTRUCTIONS,
   explainResearchStreamError,
@@ -169,6 +169,10 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
   const message = String(req.body?.message || '').trim();
   if (!conversation) { res.status(404).json({ message: '会话不存在' }); return; }
   if (!message) { res.status(400).json({ message: '消息不能为空' }); return; }
+  if (!hasUsableLlmSettings(req.userId!)) {
+    res.status(428).json(apiSettingsRequired(conversation.surface === 'research' ? '科研对话' : '智能对话'));
+    return;
+  }
   const db = getDb();
   db.prepare('INSERT INTO conversation_messages (conversation_id, user_id, role, content) VALUES (?, ?, ?, ?)').run(id, req.userId!, 'user', message);
   db.prepare("UPDATE conversations SET updated_at=datetime('now','localtime') WHERE id=? AND user_id=?").run(id, req.userId!);
@@ -191,29 +195,15 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     res.status(503).json({ message: 'PAPERCLAW Agent 未配置' });
     return;
   }
-  if (!await probeAgent(1500)) {
+  // Research needs the chat model, not mentor-readiness. Let the actual
+  // streaming request decide that dependency so research does not spend an
+  // extra probe round-trip before showing the first token.
+  if (conversation.surface !== 'research' && !await probeAgent(1500)) {
     const message = 'PAPERCLAW Agent 当前未就绪（数据库或上游依赖不可用），请稍后重试。';
     persistAssistantMessage(id!, req.userId!, message, { source: 'paperclaw', error: true });
     res.status(503).json({ message });
     return;
   }
-  if (conversation.surface === 'research') {
-    const chatReady = await probeResearchChat(req.userId!, 10_000);
-    if (!chatReady.ready) {
-      const failure = explainResearchStreamError(
-        new Error(chatReady.error || 'chat_gateway_unreachable'),
-        researchAgentTimeoutMs(),
-      ).message;
-      persistAssistantMessage(id!, req.userId!, `这次处理没有完成：${failure}`, {
-        source: 'paperclaw',
-        error: true,
-        phase: 'chat_preflight',
-      });
-      res.status(503).json({ message: failure });
-      return;
-    }
-  }
-
   const controller = new AbortController();
   const timeoutMs = researchAgentTimeoutMs();
   const timer = setTimeout(() => controller.abort(), timeoutMs);

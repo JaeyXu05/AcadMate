@@ -113,6 +113,7 @@ class AgentMessageRequest(BaseModel):
     timeout: int = 60
     max_retries: int = 2
     chat_provider_name: str | None = None
+    extra_body: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

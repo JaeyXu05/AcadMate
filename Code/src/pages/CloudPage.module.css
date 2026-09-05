@@ -10,7 +10,7 @@
 .status_stale { border-color: rgba(255,188,92,.4); background: rgba(255,174,66,.12); color: #ffd18d; }
 .status_snapshot { border-color: rgba(143,169,232,.32); background: rgba(111,139,206,.12); color: #b9c9ee; }
 .body { position: relative; display: flex; flex: 1; gap: 14px; min-height: 0; overflow: hidden; padding: 0 24px 22px; }
-.canvasWrap { position: relative; flex: 1; min-width: 0; overflow: hidden; border: 1px solid rgba(147,170,228,.15); border-radius: 18px; background: #030611; box-shadow: 0 20px 60px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.025); }
+.canvasWrap { position: relative; flex: 1; min-width: 0; overflow: hidden; touch-action: none; user-select: none; border: 1px solid rgba(147,170,228,.15); border-radius: 18px; background: #030611; box-shadow: 0 20px 60px rgba(0,0,0,.28), inset 0 1px rgba(255,255,255,.025); }
 .canvasWrap:focus-within { border-color: rgba(143,169,232,.38); }
 .centerState { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: radial-gradient(circle, rgba(31,51,96,.16), #030611 70%); }
 .stateText { color: rgba(224,231,249,.62); }
