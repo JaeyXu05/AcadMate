@@ -54,6 +54,42 @@ export async function probeAgentLiveness(timeoutMs = 2500): Promise<boolean> {
   } catch { return false; }
 }
 
+/** Probe the model gateway for the research conversation itself.
+ * `/api/mentor-ready` intentionally ignores chat in deterministic mentor mode,
+ * so it cannot be used to decide whether a research conversation can run.
+ */
+export async function probeResearchChat(
+  userId: number,
+  timeoutMs = 10_000,
+): Promise<{ ready: boolean; error?: string }> {
+  const base = agentBase();
+  if (!base) return { ready: false, error: 'chat_gateway_unreachable' };
+  const userLlm = getLlmApiSettings(userId, true);
+  const hasUserOverride = Boolean(userLlm.enabled && userLlm.baseUrl && userLlm.model && userLlm.apiKey);
+  try {
+    const response = await fetch(agentUrl('/api/chat-ready'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(hasUserOverride ? {
+        api_key: userLlm.apiKey,
+        base_url: userLlm.baseUrl,
+        model: userLlm.model,
+      } : {}),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const payload = await response.json().catch(() => ({}));
+    return {
+      ready: response.ok && payload?.ready !== false,
+      error: payload?.error ? String(payload.error) : (!response.ok ? 'chat_gateway_unreachable' : undefined),
+    };
+  } catch (error) {
+    return {
+      ready: false,
+      error: error instanceof Error ? error.message : 'chat_gateway_unreachable',
+    };
+  }
+}
+
 function isAgentUnreachable(err: unknown): boolean {
   const parts: string[] = [];
   if (err instanceof Error) {

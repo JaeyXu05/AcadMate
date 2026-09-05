@@ -7,7 +7,8 @@ export interface Advisor {
   tags: string[];
   /** H 指数（当前 RAG/A 后端均无真实值，暂留作备用；界面用 papers 论文数展示） */
   hIndex?: number;
-  papers: number;
+  /** 仅在 RAG 有可信论文总数时存在；缺失/零值不在界面展示。 */
+  papers?: number;
   /** 论文标题列表（来自 RAG candidate.publications，检索时主动展示论文证据） */
   publications?: string[];
   matchScore: number;

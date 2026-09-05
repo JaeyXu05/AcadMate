@@ -1,7 +1,7 @@
 import { Router, Response } from 'express';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
 import { getDb } from '../db';
-import { agentBase, agentUrl, probeAgent } from '../harnessClient';
+import { agentBase, agentUrl, probeAgent, probeResearchChat } from '../harnessClient';
 import { getLlmApiSettings } from '../services/llmSettings';
 import {
   RESEARCH_ASSISTANT_INSTRUCTIONS,
@@ -197,6 +197,22 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     res.status(503).json({ message });
     return;
   }
+  if (conversation.surface === 'research') {
+    const chatReady = await probeResearchChat(req.userId!, 10_000);
+    if (!chatReady.ready) {
+      const failure = explainResearchStreamError(
+        new Error(chatReady.error || 'chat_gateway_unreachable'),
+        researchAgentTimeoutMs(),
+      ).message;
+      persistAssistantMessage(id!, req.userId!, `这次处理没有完成：${failure}`, {
+        source: 'paperclaw',
+        error: true,
+        phase: 'chat_preflight',
+      });
+      res.status(503).json({ message: failure });
+      return;
+    }
+  }
 
   const controller = new AbortController();
   const timeoutMs = researchAgentTimeoutMs();
@@ -242,7 +258,10 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     });
     if (!upstream.ok || !upstream.body) {
       const detail = (await upstream.text().catch(() => '')).slice(0, 500);
-      const failure = detail || 'PAPERCLAW Agent 调用失败';
+      const rawFailure = detail || 'PAPERCLAW Agent 调用失败';
+      const failure = conversation.surface === 'research'
+        ? explainResearchStreamError(new Error(rawFailure), timeoutMs).message
+        : rawFailure;
       persistAssistantMessage(id!, req.userId!, `这次处理没有完成：${failure}`, { source: 'paperclaw', error: true });
       res.status(upstream.status || 502).json({ message: failure });
       return;
@@ -259,6 +278,7 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     let terminalError = '';
     const consume = (line: string) => {
       if (!line.trim()) return;
+      let outputLine = line;
       try {
         const event = JSON.parse(line) as { type?: string; thread_id?: number; message?: string; error?: string };
         if (event.thread_id && !conversation.agent_thread_id) {
@@ -273,9 +293,14 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
         if (event.type === 'run_failed' || event.type === 'run_cancelled' || event.type === 'run_waiting_for_user') {
           terminalType = event.type;
           terminalError = String(event.error || event.message || '');
+          if (event.type === 'run_failed' && conversation.surface === 'research') {
+            terminalError = explainResearchStreamError(new Error(terminalError || 'PAPERCLAW Agent 调用失败'), timeoutMs).message;
+            event.error = terminalError;
+            outputLine = JSON.stringify(event);
+          }
         }
       } catch { /* 保持原始事件透传 */ }
-      res.write(`${line}\n`);
+      res.write(`${outputLine}\n`);
       flushStream(res);
     };
     while (true) {
@@ -290,7 +315,12 @@ conversationsRouter.post('/:id/messages/stream', async (req: AuthRequest, res: R
     if (buffer.trim()) consume(buffer);
     const fallback = '科研助手没有返回文字内容。请再试一次，或改用右侧「论文检索」。';
     let saved = assistantText.trim();
-    if (!saved && terminalType === 'run_failed') saved = `这次处理没有完成：${terminalError || 'PAPERCLAW Agent 调用失败'}`;
+    if (!saved && terminalType === 'run_failed') {
+      const failure = conversation.surface === 'research'
+        ? explainResearchStreamError(new Error(terminalError || 'PAPERCLAW Agent 调用失败'), timeoutMs).message
+        : (terminalError || 'PAPERCLAW Agent 调用失败');
+      saved = `这次处理没有完成：${failure}`;
+    }
     if (!saved && terminalType === 'run_cancelled') saved = '这次科研对话已被取消。';
     if (!saved && terminalType === 'run_waiting_for_user') saved = '需要你确认后才能继续。请在对话里明确选择论文，或使用右侧论文检索。';
     if (!saved) saved = fallback;

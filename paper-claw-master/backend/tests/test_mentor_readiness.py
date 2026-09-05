@@ -33,3 +33,34 @@ def test_deterministic_mentor_readiness_does_not_require_chat(monkeypatch):
     assert payload["ready"] is True
     assert payload["mode"] == "deterministic"
     assert payload["dependencies"]["chat_required"] is False
+
+
+def test_chat_readiness_accepts_a_user_override_without_using_global_cache(monkeypatch):
+    app_module = import_module("backend.api.app")
+    calls = []
+
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"id": "user-model"}]}
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, headers):
+            calls.append((url, headers))
+            return _Response()
+
+    monkeypatch.setattr(app_module, "get_settings", lambda: SimpleNamespace(
+        chat_api_key="global-key", chat_base_url="https://global.example", chat_model="global-model",
+    ))
+    monkeypatch.setattr(app_module, "_chat_probe_client", lambda _base_url: _Client())
+
+    assert app_module._chat_readiness("user-key", "https://user.example", "user-model") == (True, None)
+    assert calls == [("https://user.example/models", {"Authorization": "Bearer user-key"})]

@@ -228,7 +228,10 @@ def _generate_profile(
         # timeouts, so keep the provider-configured budget (120s by default)
         # instead of inventing a shorter local ceiling.
         "timeout": float(provider.settings.get("timeout") or settings.chat_timeout_seconds),
-        "max_retries": 0,
+        # A reset before response headers is transient on some gateways. Keep
+        # one retry for this synchronous research-profile call while keeping
+        # the total D-side request budget bounded.
+        "max_retries": 1,
         "response_format": {"type": "json_object"},
         # DeepSeek v4 defaults to emitting a long reasoning_content before the
         # JSON; when reasoning exhausts the token budget, content stays empty
@@ -269,7 +272,7 @@ def _generate_profile(
         "model": provider.model,
         "base_host": urlparse(provider.base_url or "").hostname,
         "timeout_seconds": provider.settings["timeout"],
-        "max_retries": 0,
+        "max_retries": provider.settings["max_retries"],
     }
 
 

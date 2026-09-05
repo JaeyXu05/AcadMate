@@ -3,20 +3,25 @@ import test from 'node:test';
 
 import {
   RESEARCH_ASSISTANT_INSTRUCTIONS,
+  explainResearchProfileError,
   explainResearchStreamError,
   researchAgentOverrides,
+  researchProfileTimeoutMs,
   researchAgentTimeoutMs,
 } from './researchRuntime';
 
-test('research chat uses a bounded, zero-retry model call', () => {
+test('research chat keeps the output budget and inherits A-side timeout policy', () => {
   assert.deepEqual(researchAgentOverrides('research'), {
     max_tokens: 2200,
-    timeout: 35,
-    max_retries: 0,
+    timeout: 120,
+    max_retries: 2,
   });
   assert.deepEqual(researchAgentOverrides('search'), {});
-  assert.equal(researchAgentTimeoutMs({}), 75_000);
+  assert.equal(researchAgentTimeoutMs({}), 180_000);
+  assert.equal(researchAgentTimeoutMs({ RESEARCH_AGENT_TIMEOUT_MS: '20000' }), 20_000);
   assert.equal(researchAgentTimeoutMs({ RESEARCH_AGENT_TIMEOUT_MS: '60000' }), 60_000);
+  assert.equal(researchProfileTimeoutMs({}), 300_000);
+  assert.equal(researchProfileTimeoutMs({ RESEARCH_PROFILE_TIMEOUT_MS: '240000' }), 240_000);
 });
 
 test('research prompt requires readable, evidence-bounded output', () => {
@@ -28,7 +33,30 @@ test('research prompt requires readable, evidence-bounded output', () => {
 test('timeout errors become an actionable Chinese message', () => {
   const result = explainResearchStreamError(new DOMException('aborted', 'AbortError'));
   assert.equal(result.timedOut, true);
-  assert.match(result.message, /75 秒/);
+  assert.match(result.message, /180 秒/);
   assert.match(result.message, /部分内容会保留/);
   assert.match(explainResearchStreamError(new DOMException('aborted', 'AbortError'), 60_000).message, /60 秒/);
+});
+
+test('upstream connection failures become actionable without exposing credentials', () => {
+  const result = explainResearchStreamError(new Error("couldn't get a connection after 30.00 sec"));
+  assert.equal(result.timedOut, false);
+  assert.match(result.message, /网关连接失败/);
+  assert.doesNotMatch(result.message, /30\.00/);
+  assert.match(
+    explainResearchStreamError(new Error('InternalServerError: upstream connect error or disconnect/reset before headers. reset reason: connection termination')).message,
+    /网关连接失败/,
+  );
+});
+
+test('upstream authentication and model errors get distinct guidance', () => {
+  assert.match(explainResearchStreamError(new Error('401 Unauthorized')).message, /鉴权失败/);
+  assert.match(explainResearchStreamError(new Error('configured_model_unavailable')).message, /模型或接口不存在/);
+});
+
+test('research profile maps gateway reset and timeout failures', () => {
+  const reset = explainResearchProfileError(new Error('InternalServerError: upstream connect error or disconnect/reset before headers. reset reason: connection termination'));
+  assert.equal(reset.timedOut, false);
+  assert.match(reset.message, /画像模型网关连接失败/);
+  assert.match(explainResearchProfileError(new DOMException('aborted', 'AbortError')).message, /300 秒/);
 });

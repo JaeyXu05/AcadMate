@@ -67,7 +67,8 @@ function ComparePage() {
   }, [ids]);
 
   // 各指标最优值（用于高亮）
-  const maxPapers = Math.max(...advisors.map((a) => a.papers), 0);
+  const maxPapers = Math.max(...advisors.map((a) => a.papers ?? 0), 0);
+  const hasPaperCounts = advisors.some((a) => typeof a.papers === 'number' && Number.isFinite(a.papers) && a.papers > 0);
   const maxMatch = Math.max(...advisors.map((a) => a.matchScore), 0);
 
   if (loading) {
@@ -125,7 +126,11 @@ function ComparePage() {
         </div>
       ),
     },
-    { label: '论文数', render: (a) => a.papers, best: (a) => a.papers === maxPapers && a.papers > 0 },
+    ...(hasPaperCounts ? [{
+      label: '论文数',
+      render: (a: AdvisorDetail) => typeof a.papers === 'number' && Number.isFinite(a.papers) && a.papers > 0 ? a.papers : '',
+      best: (a: AdvisorDetail) => typeof a.papers === 'number' && a.papers === maxPapers && a.papers > 0,
+    }] : []),
     {
       label: '相关性评分（非概率）',
       render: (a) => `${Math.round(a.matchScore * 10) / 10}/100`,

@@ -4,6 +4,7 @@ import { getDb } from '../db';
 import { loadGrowthState, loadTrustedAgentContext } from '../data/growthStore';
 import { postHarnessRun } from '../harnessClient';
 import { authMiddleware, AuthRequest } from '../middleware/auth';
+import { explainResearchProfileError, researchProfileTimeoutMs } from '../researchRuntime';
 import { getLlmApiSettings, saveLlmApiSettings } from '../services/llmSettings';
 
 export const userRouter = Router();
@@ -182,7 +183,7 @@ userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => 
       // Allow the same 120s provider budget as other model features plus
       // headroom for the synchronous A-side profile call. A 28s cap caused
       // valid slow DeepSeek responses to surface as "生成超时".
-    }, 150_000);
+    }, researchProfileTimeoutMs());
     const artifact = result?.artifact;
     const runStatus = String(result?.status || '');
     const reviewStatus = String(result?.review_status || artifact?.review_status || '');
@@ -208,17 +209,9 @@ userRouter.post('/research-profile', async (req: AuthRequest, res: Response) => 
     ).run(JSON.stringify(saved), req.userId!);
     res.json({ profile: saved, stale: false });
   } catch (error) {
-    const status = Number((error as { status?: number })?.status) || 502;
-    const raw = error instanceof Error ? error.message : '科研画像生成失败';
-    let message = raw;
-    if (/model.*not set|chat_model_missing|未配置/i.test(raw)) {
-      message = '科研画像需要模型服务，请先在环境配置中填写聊天模型后再试。';
-    } else if (/未启动|无法连接|fetch failed|econnrefused/i.test(raw)) {
-      message = '科研画像服务当前未就绪，请启动 PAPERCLAW Agent 后重试；已有画像和个人资料不会丢失。';
-    } else if (/超时|timeout|aborted/i.test(raw)) {
-      message = '科研画像生成超时，本次请求已停止；已有画像和个人资料不会丢失，请稍后重试。';
-    }
-    res.status(status).json({ message });
+    const mapped = explainResearchProfileError(error, researchProfileTimeoutMs());
+    const status = Number((error as { status?: number })?.status) || (mapped.timedOut ? 504 : 502);
+    res.status(status).json({ message: mapped.message });
   }
 });
 

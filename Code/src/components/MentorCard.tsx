@@ -108,7 +108,7 @@ function MentorCard({ advisor, compact = false, featured = false, onDislike }: M
             className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-stone-400"
             onClick={(e) => e.stopPropagation()}
           >
-            <span>论文 {advisor.papers}</span>
+            {typeof advisor.papers === 'number' && Number.isFinite(advisor.papers) && advisor.papers > 0 && <span>论文 {advisor.papers}</span>}
             <button
               type="button"
               className="text-stone-500 underline-offset-4 hover:text-stone-800 hover:underline"

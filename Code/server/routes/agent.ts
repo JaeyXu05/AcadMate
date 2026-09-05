@@ -22,7 +22,7 @@ import { persistUploadedPdf, loadResearchDocument } from '../data/researchDocume
 import { cleanTopics } from '../data/topicBoilerplate';
 import { getDb } from '../db';
 import { getLlmApiSettings } from '../services/llmSettings';
-import { ragStore, ragData, toLightAdvisor } from '../data/ragAdvisors';
+import { ragStore, ragData, reliablePublicationTotal, toLightAdvisor } from '../data/ragAdvisors';
 import { retrieveQualifiedMentors, reviewMatches, relevanceThreshold, keepDisplayableAdvisors, longTermInterestTerms } from '../data/mentorRetrieval';
 import { extractPdfPages, extractPdfText } from './pdfText';
 import { reconcileProgressReport } from './reports';
@@ -238,9 +238,10 @@ function mapFinalMentor(m: any, index: number): any {
   const candidate = m?.candidate ?? {};
   const match = m?.match ?? {};
   const candidateEvidence: any[] = Array.isArray(m?.evidence) ? m.evidence : [];
-  // C 侧只把已确认作者的代表作写入 candidate；论文总数使用来源平台的独立口径。
+  // C 侧只把已确认作者的代表作写入 candidate；只有带来源的平台总数
+  // 才能作为论文数，不能回退到代表作列表长度。
   const pubList: unknown[] = Array.isArray(candidate.publications) ? candidate.publications : [];
-  const sourcePublicationTotal = Number(candidate.source_metadata?.publication_total_count);
+  const sourcePublicationTotal = reliablePublicationTotal(candidate.source_metadata, pubList.length);
   const evidenceRefs = [
     ...(Array.isArray(candidate.evidence_refs) ? candidate.evidence_refs : []),
     ...(Array.isArray(match.evidence_refs) ? match.evidence_refs : []),
@@ -262,8 +263,7 @@ function mapFinalMentor(m: any, index: number): any {
     tags: cleanTopics(
       Array.isArray(candidate.research_topics) ? candidate.research_topics : [],
     ),
-    papers: Number.isFinite(sourcePublicationTotal) && sourcePublicationTotal >= 0
-      ? sourcePublicationTotal : pubList.length,
+    ...(sourcePublicationTotal === undefined ? {} : { papers: sourcePublicationTotal }),
     publications: pubList,
     // Preserve one decimal place from A's calibrated score.  Integer rounding
     // collapsed distinct evidence/retrieval signals (for example 97.9 and

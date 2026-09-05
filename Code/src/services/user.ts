@@ -84,7 +84,7 @@ export async function generateResearchProfile(): Promise<ResearchProfileResponse
     undefined,
     // Model-backed profile generation may take over a minute on a reasoning
     // model; do not let the axios 30s default turn it into a false timeout.
-    { timeout: 150000 },
+    { timeout: 300000 },
   )).data;
   return { profile: normalizeResearchProfile(data?.profile), stale: Boolean(data?.stale) };
 }
