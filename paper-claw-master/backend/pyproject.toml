@@ -3,7 +3,7 @@ name = "backend"
 version = "0.1.0"
 description = "Add your description here"
 authors = [
-    { name = "Alemax067", email = "2657236382@qq.com" }
+    { name = "Mentor Platform Team" }
 ]
 requires-python = ">=3.12"
 dependencies = [

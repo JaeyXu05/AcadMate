@@ -89,7 +89,7 @@ export function studentIdentity(userId: number): {
   const grade = String(row?.grade || '').trim();
   const major = String(row?.major || '').trim();
   // 邮箱前缀不是学生姓名；没有填写昵称时应跳过姓名相关内容，
-  // 避免把 xjy230702 之类的登录标识写进套磁信。
+  // 避免把“数字/字母邮箱标识”之类的登录标识写进套磁信。
   const name = nickname;
   const education = [grade, major].filter(Boolean).join(' / ');
   return { name, email, grade, major, education };
