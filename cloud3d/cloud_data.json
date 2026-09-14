@@ -1,0 +1,39 @@
+{
+ "meta": {
+  "schema_version": 2,
+  "title": "导师研究星图",
+  "generated_at": "未知",
+  "source_chain": [
+   "internal_ustc_rag"
+  ],
+  "mentor_count": 0,
+  "evidence_count": 0,
+  "domain_count": 0,
+  "departments": [],
+  "legend": [],
+  "camera": {
+   "target": [
+    0,
+    0,
+    0
+   ],
+   "radius": 1500,
+   "r_out": 570.0,
+   "r_in": 120.0,
+   "arms": 4
+  },
+  "layout": {
+   "algorithm": "balanced_double_orbit_v4",
+   "galaxy_spacing": 570.0,
+   "cloud_scale": 70,
+   "disk_radius": 570.0,
+   "arms": 4
+  },
+  "classification": {
+   "strategy": "keyword_score_desc_v2",
+   "classified_count": 0,
+   "unclassified_count": 0
+  }
+ },
+ "nodes": []
+}

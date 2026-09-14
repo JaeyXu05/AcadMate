@@ -1,0 +1,15 @@
+{
+ "generated_at": "",
+ "run_date": "",
+ "source_chain": [
+  "internal_ustc_rag"
+ ],
+ "mentor_count": 0,
+ "evidence_count": 0,
+ "skipped_non_mentor": 0,
+ "warnings": [
+  "数据已清空：项目已从校内科大导师库重新定位为自进化科研助手，运行时不内置任何特定高校导师数据。如需启用导师检索，请通过 data_scripts 接入目标机构导师列表后重建本文件。"
+ ],
+ "candidates": [],
+ "evidence": []
+}
