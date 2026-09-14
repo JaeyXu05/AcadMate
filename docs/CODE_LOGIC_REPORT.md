@@ -29,17 +29,13 @@
 
 | 数据项 | 当前值 |
 |---|---:|
-| RAG 导师 | 972 |
-| RAG 证据 | 1969 |
-| 有 `research_topics` | 660（官网 597，论文标题推断 63） |
-| 有 `publications` | 259 |
-| 有 `methods` | 45 |
-| 有 `recruitment_status` | 107 |
-| 有 `profile_bio` / `profile_email` | 758 / 193 |
-| 证据来源 | 官方目录 972、官方主页 630、OpenAlex 200、S2 150、DBLP 17 |
-| 星图节点 | 972（classified 924，unclassified 48） |
+| RAG 导师 | 0 |
+| RAG 证据 | 0 |
+| 星图节点 | 0 |
 
-运行时数据检查确认 RAG 与当前星图有 972 个共享导师 ID，缺失和孤立 ID 都是 0。
+仓库不内置任何特定高校导师数据。`ustc_mentor_rag.json` 当前是空的合法骨架（保留 `candidates`/`evidence`/`source_chain`/`warnings` 等顶层字段），`cloud3d/cloud_data.json` 为对应空星图。接入目标机构导师数据后，这些计数随重建结果变化；接入方式见 `paper-claw-master/data_scripts/README.md`。
+
+运行时数据检查确认 RAG 与当前星图的 `candidate_id` 集合一致（空集 == 空集），缺失和孤立 ID 都是 0。
 
 跨模块稳定主键是 `candidate_id`，格式为 `ustc_faculty_<faculty_id>`。它同时用于：
 
@@ -426,9 +422,9 @@ Repository 层封装查询与状态转移，Service 层编排检索、采集、�
 | Paper Claw 后端完整测试（Docker PostgreSQL） | 366/366 通过；28 分 15 秒 |
 | 星图测试 | 5/5 通过 |
 | 数据质量测试 | 5/5 通过 |
-| RAG 自检 | A–G 全部通过；972 candidates / 1969 evidence |
-| 跨模块运行时数据 | 972 个共享 candidate_id，通过 |
-| Windows 启动预检、真实服务启动与新用户烟测 | 通过；注册、画像、推荐、428 API 门、合并 PDF、PPT 导出均验证 |
+| RAG 自检 | 空库下 gate C/D 失败（数据存在性门，预期行为）；schema/引用/语义元数据等门通过；0 candidates / 0 evidence |
+| 跨模块运行时数据 | RAG 与星图 candidate_id 集合一致（空集 == 空集），通过 |
+| Windows 启动预检、真实服务启动与新用户烟测 | 通过；启动链路与烟测已适配空库（见 `scripts/`），注册、画像、合并 PDF、PPT 导出均验证 |
 
 完整后端测试没有失败，但输出了三类兼容性警告：FastAPI `on_event` 已被官方标记为未来弃用；两个导师工作流 API 测试中的 `freshness="unknown"` 测试值触发 Pydantic 枚举序列化提示；当前 FastEmbed 版本提示多语种 MPNet 模型已从 CLS pooling 改为 mean pooling。这些警告不影响本次通过结论，但升级 FastAPI、Pydantic 或 FastEmbed 时需要复核。
 

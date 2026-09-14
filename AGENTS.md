@@ -14,10 +14,11 @@
 
 ## 当前数据契约
 
-- RAG：972 位导师、1969 条证据；660 位导师有非空 `research_topics`。
-- 星图：972 个节点，与 RAG 的 `candidate_id` 集合完全一致。
+- RAG：仓库不内置任何特定高校导师数据，`ustc_mentor_rag.json` 当前为空骨架（0 导师、0 证据）。空库下检索返回明确的 `NO_MATCH`，推荐/详情等接口返回"数据源不可用"，不虚构导师。接入目标机构导师数据的方式见 `paper-claw-master/data_scripts/README.md`。
+- 星图：0 节点，与 RAG 的 `candidate_id` 集合一致（空集 == 空集）。
 - A 的导师匹配默认走确定性模式；模型增强由 `PAPER_CLAW_MENTOR_WORKFLOW_MODEL_REASONING_ENABLED` 显式开启。
 - D 通过 `/api/agent/chat` 创建并轮询 A 的 run，再映射为前端 `Advisor`；详情、推荐、邮件和 PDF 均使用真实 RAG/工作流数据。
+- 已知遗留：A 端导师工作流仍保留向中科大官网实时抓取的兜底检索源（`mentor_workflow/ustc_sources.py`），在本地 RAG 召回为空时触发；后续替换为机构无关检索源。
 
 ## 修改边界
 

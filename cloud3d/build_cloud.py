@@ -263,7 +263,7 @@ def build(rag_path, out_path):
     # 5) 顶层元信息 + 统计
     meta = {
         "schema_version": 2,
-        "title": "中国科学技术大学 · 导师研究星图",
+        "title": "导师研究星图",
         "generated_at": rag.get("generated_at") or rag.get("run_date") or "未知",
         "source_chain": rag.get("source_chain") or [],
         "mentor_count": len(nodes),

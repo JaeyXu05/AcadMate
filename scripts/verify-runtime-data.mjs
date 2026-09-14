@@ -13,13 +13,19 @@ try {
   const cloud = JSON.parse(fs.readFileSync(cloudPath, 'utf8'));
   const ragIds = new Set((rag.candidates ?? []).map((item) => String(item?.candidate_id ?? '')).filter(Boolean));
   const cloudIds = new Set((cloud.nodes ?? []).map((item) => String(item?.candidate_id ?? '')).filter(Boolean));
-  if (!ragIds.size || !cloudIds.size) throw new Error('RAG or cloud data contains no mentor nodes.');
+  // An empty mentor corpus is a valid state: the project ships without any
+  // school-specific mentor data and can run with an empty RAG until a target
+  // institution's mentor list is imported via data_scripts. Only require that
+  // the RAG and cloud-graph node sets agree (empty == empty is consistent).
+  if (ragIds.size !== cloudIds.size) {
+    throw new Error(`candidate_id count mismatch: rag=${ragIds.size}, cloud=${cloudIds.size}. Rebuild cloud3d/cloud_data.json from the current RAG.`);
+  }
   const ragOnly = [...ragIds].filter((id) => !cloudIds.has(id));
   const cloudOnly = [...cloudIds].filter((id) => !ragIds.has(id));
   if (ragOnly.length || cloudOnly.length) {
     throw new Error(`candidate_id mismatch: rag-only=${ragOnly.length}, cloud-only=${cloudOnly.length}.`);
   }
-  console.log(`[OK] Runtime data is readable: ${ragIds.size} shared mentor IDs.`);
+  console.log(`[OK] Runtime data is readable: ${ragIds.size} mentor IDs in RAG and cloud graph are consistent.`);
   const ragEvidence = Number(rag.evidence_count ?? rag.evidence?.length ?? 0);
   const cloudEvidence = Number(cloud.meta?.evidence_count ?? 0);
   if (cloudEvidence !== ragEvidence || String(cloud.meta?.generated_at ?? '') < String(rag.generated_at ?? '')) {
